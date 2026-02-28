@@ -42,6 +42,9 @@ def init_log_db():
     conn.commit()
     conn.close()
 
+# IMPORTANT: Run DB init at import time so Render creates the table
+init_log_db()
+
 def log_action(user, action):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect(LOG_DB)
@@ -90,7 +93,6 @@ def load_data():
         except:
             return {"orders": [], "expenses": [], "inventory": [], "order_id": 1, "goal": 1000}
 
-    # Auto-repair missing keys
     defaults = {"orders": [], "expenses": [], "inventory": [], "order_id": 1, "goal": 1000}
     for key, value in defaults.items():
         if key not in data:
@@ -102,7 +104,7 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# ---------------- HTML WRAPPERS (MOBILE FRIENDLY) ----------------
+# ---------------- HTML WRAPPER (MOBILE FRIENDLY) ----------------
 
 def page(title, content, back_url="/dashboard", notification=None):
     logged_in = session.get("logged_in", False)
@@ -562,5 +564,4 @@ def admin_logs():
 # ---------------- RUN APP ----------------
 
 if __name__ == "__main__":
-    init_log_db()
     app.run(host="0.0.0.0", port=5000)
