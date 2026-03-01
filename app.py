@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = "govcorp"
+app.secret_key = "super-secret-key-change-this"
 
 DB_NAME = "data.db"
 
@@ -64,9 +64,7 @@ init_db()
 # AUTH HELPERS
 # -----------------------------
 def require_login():
-    if not session.get("logged_in"):
-        return False
-    return True
+    return bool(session.get("logged_in"))
 
 # -----------------------------
 # PWA ROUTES
@@ -195,6 +193,29 @@ def logout():
     return redirect("/")
 
 # -----------------------------
+# NAVBAR TEMPLATE SNIPPET
+# -----------------------------
+NAVBAR = """
+<nav class="navbar navbar-dark" style="background:#ff4da6;">
+  <div class="container-fluid">
+    <div class="d-flex align-items-center">
+        <img src="/icon-192.png" width="32" height="32"
+             style="border-radius:10px;" class="me-2">
+        <span class="navbar-brand">{{ title }}</span>
+    </div>
+    <div>
+        <a href="/dashboard" class="btn btn-sm btn-light me-2">Dashboard</a>
+        <a href="/orders" class="btn btn-sm btn-light me-2">Orders</a>
+        <a href="/stocks" class="btn btn-sm btn-light me-2">Stocks</a>
+        <a href="/profit" class="btn btn-sm btn-light me-2">Profit</a>
+        <a href="/admin" class="btn btn-sm btn-light me-2">Admin</a>
+        <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
+    </div>
+  </div>
+</nav>
+"""
+
+# -----------------------------
 # DASHBOARD
 # -----------------------------
 @app.route("/dashboard")
@@ -240,7 +261,6 @@ def dashboard():
 
         <style>
             body { background: #fafafa; }
-            .navbar { background: #ff4da6 !important; }
             .card { border-radius: 15px; }
             .btn-main { background: #ff4da6; color: white; }
             .toast-container {
@@ -253,19 +273,6 @@ def dashboard():
     </head>
 
     <body>
-
-    <nav class="navbar navbar-dark">
-      <div class="container-fluid">
-        <span class="navbar-brand">Seller Dashboard</span>
-        <div>
-            <a href="/orders" class="btn btn-sm btn-light me-2">Orders</a>
-            <a href="/stocks" class="btn btn-sm btn-light me-2">Stocks</a>
-            <a href="/profit" class="btn btn-sm btn-light me-2">Profit</a>
-            <a href="/admin" class="btn btn-sm btn-light me-2">Admin</a>
-            <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
-        </div>
-      </div>
-    </nav>
 
     <div class="toast-container">
       <div id="visitToast" class="toast align-items-center text-bg-dark border-0" role="alert">
@@ -287,6 +294,7 @@ def dashboard():
       </div>
     </div>
 
+    """ + NAVBAR + """
     <div class="container mt-4">
 
         <div class="row">
@@ -363,6 +371,7 @@ def dashboard():
     </html>
     """
     return render_template_string(template,
+                                  title="Dashboard",
                                   total_orders=total_orders,
                                   total_profit=total_profit,
                                   stock_count=stock_count,
@@ -387,7 +396,7 @@ def orders():
         date = request.form.get("date")
         buy_amount = float(request.form.get("buy_amount") or 0)
         sell_amount = float(request.form.get("sell_amount") or 0)
-        status = request.form.get("status") or "Pending"
+        status = "Pending"  # default
 
         c.execute("""
             INSERT INTO orders (whatnot_username, order_code, date, buy_amount, sell_amount, status)
@@ -418,7 +427,6 @@ def orders():
 
         <style>
             body { background: #fafafa; }
-            .navbar { background: #ff4da6 !important; }
             .card { border-radius: 15px; }
             .btn-main { background: #ff4da6; color: white; }
             .status-pill {
@@ -431,19 +439,7 @@ def orders():
 
     <body>
 
-    <nav class="navbar navbar-dark">
-      <div class="container-fluid">
-        <span class="navbar-brand">Orders</span>
-        <div>
-            <a href="/dashboard" class="btn btn-sm btn-light me-2">Dashboard</a>
-            <a href="/stocks" class="btn btn-sm btn-light me-2">Stocks</a>
-            <a href="/profit" class="btn btn-sm btn-light me-2">Profit</a>
-            <a href="/admin" class="btn btn-sm btn-light me-2">Admin</a>
-            <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
-        </div>
-      </div>
-    </nav>
-
+    """ + NAVBAR + """
     <div class="container mt-4">
 
         <div class="card p-3 shadow-sm mb-3">
@@ -468,15 +464,6 @@ def orders():
                 <div class="col-6 col-md-3">
                     <label class="form-label">Amount Sold (£)</label>
                     <input name="sell_amount" type="number" step="0.01" class="form-control" required>
-                </div>
-                <div class="col-12 col-md-3">
-                    <label class="form-label">Status</label>
-                    <select name="status" class="form-select">
-                        <option>Pending</option>
-                        <option>Shipped</option>
-                        <option>Completed</option>
-                        <option>Cancelled</option>
-                    </select>
                 </div>
                 <div class="col-12 col-md-3 d-flex align-items-end">
                     <button class="btn btn-main w-100" type="submit">Add Order</button>
@@ -556,7 +543,7 @@ def orders():
             "status": r[6]
         })
 
-    return render_template_string(template, orders=orders)
+    return render_template_string(template, title="Orders", orders=orders)
 
 @app.route("/orders/update/<int:order_id>", methods=["POST"])
 def update_order(order_id):
@@ -620,7 +607,6 @@ def stocks():
 
         <style>
             body { background: #fafafa; }
-            .navbar { background: #ff4da6 !important; }
             .card { border-radius: 15px; }
             .btn-main { background: #ff4da6; color: white; }
         </style>
@@ -628,19 +614,7 @@ def stocks():
 
     <body>
 
-    <nav class="navbar navbar-dark">
-      <div class="container-fluid">
-        <span class="navbar-brand">Stocks</span>
-        <div>
-            <a href="/dashboard" class="btn btn-sm btn-light me-2">Dashboard</a>
-            <a href="/orders" class="btn btn-sm btn-light me-2">Orders</a>
-            <a href="/profit" class="btn btn-sm btn-light me-2">Profit</a>
-            <a href="/admin" class="btn btn-sm btn-light me-2">Admin</a>
-            <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
-        </div>
-      </div>
-    </nav>
-
+    """ + NAVBAR + """
     <div class="container mt-4">
 
         <div class="card p-3 shadow-sm mb-3">
@@ -712,7 +686,7 @@ def stocks():
             "notes": r[4]
         })
 
-    return render_template_string(template, stocks=stocks)
+    return render_template_string(template, title="Stocks", stocks=stocks)
 
 # -----------------------------
 # PROFIT PAGE (GRAPH)
@@ -744,26 +718,13 @@ def profit():
 
         <style>
             body { background: #fafafa; }
-            .navbar { background: #ff4da6 !important; }
             .card { border-radius: 15px; }
         </style>
     </head>
 
     <body>
 
-    <nav class="navbar navbar-dark">
-      <div class="container-fluid">
-        <span class="navbar-brand">Profit</span>
-        <div>
-            <a href="/dashboard" class="btn btn-sm btn-light me-2">Dashboard</a>
-            <a href="/orders" class="btn btn-sm btn-light me-2">Orders</a>
-            <a href="/stocks" class="btn btn-sm btn-light me-2">Stocks</a>
-            <a href="/admin" class="btn btn-sm btn-light me-2">Admin</a>
-            <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
-        </div>
-      </div>
-    </nav>
-
+    """ + NAVBAR + """
     <div class="container mt-4">
         <div class="card p-3 shadow-sm mb-3">
             <h5>Profit Over Time</h5>
@@ -805,7 +766,7 @@ def profit():
     </body>
     </html>
     """
-    return render_template_string(template)
+    return render_template_string(template, title="Profit")
 
 @app.route("/api/profit-data")
 def profit_data():
@@ -826,7 +787,7 @@ def profit_data():
     return jsonify({"labels": labels, "values": values})
 
 # -----------------------------
-# ADMIN PANEL
+# ADMIN PANEL (FOR YOU)
 # -----------------------------
 @app.route("/admin")
 def admin_panel():
@@ -837,8 +798,19 @@ def admin_panel():
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+
+    c.execute("SELECT COUNT(*) FROM visits")
+    total_visits = c.fetchone()[0] or 0
+
+    c.execute("SELECT COUNT(*) FROM orders")
+    total_orders = c.fetchone()[0] or 0
+
+    c.execute("SELECT COUNT(*) FROM stocks")
+    total_stocks = c.fetchone()[0] or 0
+
     c.execute("SELECT id, event, timestamp FROM visits ORDER BY id DESC LIMIT 50")
     rows = c.fetchall()
+
     conn.close()
 
     template = """
@@ -860,27 +832,36 @@ def admin_panel():
 
         <style>
             body { background: #fafafa; }
-            .navbar { background: #ff4da6 !important; }
             .card { border-radius: 15px; }
         </style>
     </head>
 
     <body>
 
-    <nav class="navbar navbar-dark">
-      <div class="container-fluid">
-        <span class="navbar-brand">Admin Panel</span>
-        <div>
-            <a href="/dashboard" class="btn btn-sm btn-light me-2">Dashboard</a>
-            <a href="/orders" class="btn btn-sm btn-light me-2">Orders</a>
-            <a href="/stocks" class="btn btn-sm btn-light me-2">Stocks</a>
-            <a href="/profit" class="btn btn-sm btn-light me-2">Profit</a>
-            <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
-        </div>
-      </div>
-    </nav>
-
+    """ + NAVBAR + """
     <div class="container mt-4">
+
+        <div class="row mb-3">
+            <div class="col-12 col-md-4 mb-3">
+                <div class="card p-3 shadow-sm">
+                    <h6>Total Visits</h6>
+                    <h3>{{ total_visits }}</h3>
+                </div>
+            </div>
+            <div class="col-12 col-md-4 mb-3">
+                <div class="card p-3 shadow-sm">
+                    <h6>Total Orders</h6>
+                    <h3>{{ total_orders }}</h3>
+                </div>
+            </div>
+            <div class="col-12 col-md-4 mb-3">
+                <div class="card p-3 shadow-sm">
+                    <h6>Total Stock Items</h6>
+                    <h3>{{ total_stocks }}</h3>
+                </div>
+            </div>
+        </div>
+
         <div class="card p-3 shadow-sm">
             <h5>Recent Activity</h5>
             <div class="table-responsive mt-2">
@@ -904,6 +885,7 @@ def admin_panel():
                 </table>
             </div>
         </div>
+
     </div>
 
     </body>
@@ -914,7 +896,12 @@ def admin_panel():
     for r in rows:
         visits.append({"id": r[0], "event": r[1], "timestamp": r[2]})
 
-    return render_template_string(template, visits=visits)
+    return render_template_string(template,
+                                  title="Admin Panel",
+                                  total_visits=total_visits,
+                                  total_orders=total_orders,
+                                  total_stocks=total_stocks,
+                                  visits=visits)
 
 # -----------------------------
 # RUN
