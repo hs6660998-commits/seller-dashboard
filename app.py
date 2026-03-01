@@ -1,9 +1,8 @@
-from flask import Flask, request, redirect, render_template_string, session, jsonify
+from flask import Flask, request, redirect, session, jsonify
 import sqlite3
-import os
 
 app = Flask(__name__)
-app.secret_key = "your-secret-key"
+app.secret_key = "APIadmin"
 
 # -----------------------------
 # DATABASE SETUP
@@ -43,16 +42,8 @@ def manifest():
         "background_color": "#ffffff",
         "theme_color": "#ff4da6",
         "icons": [
-            {
-                "src": "/icon-192.png",
-                "sizes": "192x192",
-                "type": "image/png"
-            },
-            {
-                "src": "/icon-512.png",
-                "sizes": "512x512",
-                "type": "image/png"
-            }
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}
         ]
     }
 
@@ -62,11 +53,9 @@ def service_worker():
 self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
-
 self.addEventListener("activate", (event) => {
   clients.claim();
 });
-
 self.addEventListener("fetch", (event) => {
   event.respondWith(fetch(event.request));
 });
@@ -90,12 +79,15 @@ def login():
         user = request.form.get("username")
         pw = request.form.get("password")
 
-        if user == "admin" and pw == "password":
+        # FIXED LOGIN — admin/admin ONLY
+        if user == "admin" and pw == "admin":
             session["logged_in"] = True
-            log_action("User logged in")
+            log_action("Admin logged in")
             return redirect("/dashboard")
         else:
-            return "Invalid login"
+            return """
+            <script>alert('Invalid username or password');window.location='/'</script>
+            """
 
     return """
     <html>
@@ -105,19 +97,54 @@ def login():
         <link rel="manifest" href="/manifest.json">
         <meta name="theme-color" content="#ff4da6">
 
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
         <script>
         if ("serviceWorker" in navigator) {
             navigator.serviceWorker.register("/service-worker.js");
         }
         </script>
+
+        <style>
+            body {
+                background: linear-gradient(180deg, #ffe6f2, #ffffff);
+                height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+            .login-card {
+                width: 90%;
+                max-width: 380px;
+                padding: 30px;
+                border-radius: 15px;
+                background: white;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            }
+            .title {
+                text-align: center;
+                font-weight: bold;
+                color: #ff4da6;
+                margin-bottom: 20px;
+            }
+            .btn-main {
+                background: #ff4da6;
+                color: white;
+                width: 100%;
+            }
+        </style>
     </head>
+
     <body>
-        <h2>Login</h2>
-        <form method="POST">
-            <input name="username" placeholder="Username"><br>
-            <input name="password" type="password" placeholder="Password"><br>
-            <button type="submit">Login</button>
-        </form>
+        <div class="login-card">
+            <h3 class="title">Seller Dashboard</h3>
+
+            <form method="POST">
+                <input name="username" class="form-control mb-3" placeholder="Username">
+                <input name="password" type="password" class="form-control mb-3" placeholder="Password">
+                <button type="submit" class="btn btn-main">Login</button>
+            </form>
+        </div>
     </body>
     </html>
     """
@@ -129,6 +156,7 @@ def login():
 def dashboard():
     if not session.get("logged_in"):
         return redirect("/")
+
     return """
     <html>
     <head>
@@ -137,15 +165,44 @@ def dashboard():
         <link rel="manifest" href="/manifest.json">
         <meta name="theme-color" content="#ff4da6">
 
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
         <script>
         if ("serviceWorker" in navigator) {
             navigator.serviceWorker.register("/service-worker.js");
         }
         </script>
+
+        <style>
+            body { background: #fafafa; }
+            .navbar { background: #ff4da6 !important; }
+            .card { border-radius: 15px; }
+            .btn-main { background: #ff4da6; color: white; }
+        </style>
     </head>
+
     <body>
-        <h1>Seller Dashboard</h1>
-        <p>Welcome!</p>
+
+    <nav class="navbar navbar-dark">
+      <div class="container-fluid">
+        <span class="navbar-brand">Seller Dashboard</span>
+      </div>
+    </nav>
+
+    <div class="container mt-4">
+
+        <div class="card p-3 shadow-sm mb-3">
+            <h4>Welcome back, admin!</h4>
+            <p>Your sales overview will appear here.</p>
+        </div>
+
+        <div class="card p-3 shadow-sm mb-3">
+            <h5>Quick Actions</h5>
+            <button class="btn btn-main mt-2">Add Product</button>
+        </div>
+
+    </div>
+
     </body>
     </html>
     """
