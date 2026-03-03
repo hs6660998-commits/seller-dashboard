@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from datetime import datetime
-from flask import Flask, request, redirect, session, jsonify, render_template_string
+from flask import Flask, request, redirect, session, render_template_string
 import requests
 
 app = Flask(__name__)
@@ -40,7 +40,7 @@ def init_db():
         )
     """)
 
-    # Visits table (IP + User-Agent only; geo/device/browser computed on read)
+    # Visits table (old schema preserved)
     c.execute("""
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,39 +61,22 @@ init_db()
 # -----------------------------
 def parse_device(user_agent: str):
     ua = (user_agent or "").lower()
-    device = "Unknown"
-
-    if "iphone" in ua:
-        device = "iPhone"
-    elif "ipad" in ua:
-        device = "iPad"
-    elif "android" in ua:
-        device = "Android"
-    elif "windows" in ua:
-        device = "Windows PC"
-    elif "macintosh" in ua or "mac os" in ua:
-        device = "Mac"
-    elif "linux" in ua:
-        device = "Linux"
-
-    return device
+    if "iphone" in ua: return "iPhone"
+    if "ipad" in ua: return "iPad"
+    if "android" in ua: return "Android"
+    if "windows" in ua: return "Windows PC"
+    if "macintosh" in ua or "mac os" in ua: return "Mac"
+    if "linux" in ua: return "Linux"
+    return "Unknown"
 
 def parse_browser(user_agent: str):
     ua = (user_agent or "").lower()
-    browser = "Unknown"
-
-    if "edg" in ua:
-        browser = "Microsoft Edge"
-    elif "chrome" in ua and "safari" in ua:
-        browser = "Chrome"
-    elif "safari" in ua and "chrome" not in ua:
-        browser = "Safari"
-    elif "firefox" in ua:
-        browser = "Firefox"
-    elif "opera" in ua or "opr" in ua:
-        browser = "Opera"
-
-    return browser
+    if "edg" in ua: return "Microsoft Edge"
+    if "chrome" in ua and "safari" in ua: return "Chrome"
+    if "safari" in ua and "chrome" not in ua: return "Safari"
+    if "firefox" in ua: return "Firefox"
+    if "opera" in ua or "opr" in ua: return "Opera"
+    return "Unknown"
 
 def geo_lookup(ip: str):
     if not ip or ip in ("unknown", "127.0.0.1", "::1"):
@@ -114,13 +97,18 @@ def geo_lookup(ip: str):
     return {"country": "Unknown", "region": "", "city": ""}
 
 # -----------------------------
-# LOGGING
+# LOGGING (MATCHES DB SCHEMA)
 # -----------------------------
 def log_event(event):
     try:
-        # Prefer real client IP if behind proxy
-        ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
-        ua = request.headers.get("User-Agent", "") if request else ""
+        ip = (
+            request.headers.get("X-Forwarded-For")
+            or request.headers.get("X-Real-IP")
+            or request.remote_addr
+            or "unknown"
+        ).split(",")[0].strip()
+
+        ua = request.headers.get("User-Agent", "")
     except RuntimeError:
         ip = "unknown"
         ua = ""
@@ -141,7 +129,7 @@ def require_login():
     return bool(session.get("logged_in"))
 
 # -----------------------------
-# BASE PAGE RENDER
+# BASE PAGE TEMPLATE
 # -----------------------------
 BASE_HTML = """
 <!doctype html>
@@ -152,76 +140,76 @@ BASE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {{
+        body {
             background: linear-gradient(180deg, #ffe6f2, #ffffff);
             min-height: 100vh;
-        }}
-        .app-shell {{
+        }
+        .app-shell {
             max-width: 900px;
             margin: 0 auto;
             background: #ffffff;
             min-height: 100vh;
             box-shadow: 0 0 20px rgba(0,0,0,0.06);
-        }}
-        .navbar-custom {{
+        }
+        .navbar-custom {
             background:#ff4da6;
-        }}
-        .navbar-brand {{
+        }
+        .navbar-brand {
             font-weight: 700;
-        }}
-        .nav-btn {{
+        }
+        .nav-btn {
             border-radius: 999px;
             padding: 4px 10px;
             font-size: 0.8rem;
-        }}
-        .card-metric {{
+        }
+        .card-metric {
             border-radius: 16px;
             background: #fff5fb;
             border: 1px solid #ffd1ec;
-        }}
-        .card-metric h5 {{
+        }
+        .card-metric h5 {
             font-size: 0.9rem;
             color: #ff4da6;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-        }}
-        .card-metric .value {{
+        }
+        .card-metric .value {
             font-size: 1.8rem;
             font-weight: 700;
             color: #333;
-        }}
-        .page-header {{
+        }
+        .page-header {
             display:flex;
             justify-content:space-between;
             align-items:center;
             margin-top:1.5rem;
             margin-bottom:1rem;
-        }}
-        .page-title {{
+        }
+        .page-title {
             font-weight:700;
             font-size:1.3rem;
-        }}
-        .pill-badge {{
+        }
+        .pill-badge {
             border-radius:999px;
             padding:2px 10px;
             font-size:0.75rem;
             background:#ffe6f7;
             color:#ff4da6;
-        }}
-        table thead {{
+        }
+        table thead {
             background:#fff0f8;
-        }}
-        table thead th {{
+        }
+        table thead th {
             border-bottom:2px solid #ffd1ec !important;
             font-size:0.8rem;
             text-transform:uppercase;
             letter-spacing:0.05em;
             color:#ff4da6;
-        }}
-        table tbody td {{
+        }
+        table tbody td {
             font-size:0.85rem;
             vertical-align:middle;
-        }}
+        }
     </style>
 </head>
 <body>
@@ -260,18 +248,12 @@ def render_page(title, inner_html):
 @app.route("/", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        user = request.form.get("username")
-        pw = request.form.get("password")
-
-        if user == "admin" and pw == "admin":
+        if request.form.get("username") == "admin" and request.form.get("password") == "admin":
             session["logged_in"] = True
             session["username"] = "admin"
             log_event("Admin logged in")
             return redirect("/dashboard?login=1")
-        else:
-            return """
-            <script>alert('Invalid username or password');window.location='/'</script>
-            """
+        return "<script>alert('Invalid username or password');window.location='/'</script>"
 
     template = """
     <html>
@@ -401,18 +383,10 @@ def orders():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = ""
-    for r in rows:
-        table_rows += f"""
-        <tr>
-            <td>{r[1]}</td>
-            <td>{r[2]}</td>
-            <td>{r[3]}</td>
-            <td>£{r[4]:.2f}</td>
-            <td>£{r[5]:.2f}</td>
-            <td>{r[6]}</td>
-        </tr>
-        """
+    table_rows = "".join([
+        f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>£{r[4]:.2f}</td><td>£{r[5]:.2f}</td><td>{r[6]}</td></tr>"
+        for r in rows
+    ])
 
     inner = f"""
     <div class="page-header">
@@ -458,16 +432,10 @@ def stocks():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = ""
-    for r in rows:
-        table_rows += f"""
-        <tr>
-            <td>{r[1]}</td>
-            <td>{r[2]}</td>
-            <td>£{r[3]:.2f}</td>
-            <td>{r[4]}</td>
-        </tr>
-        """
+    table_rows = "".join([
+        f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>£{r[3]:.2f}</td><td>{r[4]}</td></tr>"
+        for r in rows
+    ])
 
     inner = f"""
     <div class="page-header">
@@ -511,14 +479,10 @@ def profit():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = ""
-    for r in rows:
-        table_rows += f"""
-        <tr>
-            <td>{r[0]}</td>
-            <td>£{r[1]:.2f}</td>
-        </tr>
-        """
+    table_rows = "".join([
+        f"<tr><td>{r[0]}</td><td>£{r[1]:.2f}</td></tr>"
+        for r in rows
+    ])
 
     inner = f"""
     <div class="page-header">
@@ -545,7 +509,7 @@ def profit():
     return render_page("Profit", inner)
 
 # -----------------------------
-# ADMIN PAGE (VISIT LOGS + GEO/DEVICE/BROWSER)
+# ADMIN PAGE
 # -----------------------------
 @app.route("/admin")
 def admin():
@@ -565,9 +529,10 @@ def admin():
         geo = geo_lookup(ip)
         device = parse_device(ua)
         browser = parse_browser(ua)
-        loc = f"{geo['city']}, {geo['region']}, {geo['country']}".strip().strip(", ")
+        loc = f"{geo['city']}, {geo['region']}, {geo['country']}".strip(", ").strip()
         if not loc:
             loc = "Unknown"
+
         table_rows += f"""
         <tr>
             <td>{event}</td>
@@ -609,7 +574,7 @@ def admin():
     return render_page("Admin", inner)
 
 # -----------------------------
-# RUN
+# RUN (RENDER-SAFE)
 # -----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
