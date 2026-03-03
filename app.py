@@ -16,7 +16,6 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    # Orders table
     c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +28,6 @@ def init_db():
         )
     """)
 
-    # Stocks table
     c.execute("""
         CREATE TABLE IF NOT EXISTS stocks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +38,6 @@ def init_db():
         )
     """)
 
-    # Visits table (old schema preserved)
     c.execute("""
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,10 +54,10 @@ def init_db():
 init_db()
 
 # -----------------------------
-# DEVICE / BROWSER / GEO HELPERS
+# HELPERS
 # -----------------------------
-def parse_device(user_agent: str):
-    ua = (user_agent or "").lower()
+def parse_device(ua):
+    ua = (ua or "").lower()
     if "iphone" in ua: return "iPhone"
     if "ipad" in ua: return "iPad"
     if "android" in ua: return "Android"
@@ -69,36 +66,33 @@ def parse_device(user_agent: str):
     if "linux" in ua: return "Linux"
     return "Unknown"
 
-def parse_browser(user_agent: str):
-    ua = (user_agent or "").lower()
-    if "edg" in ua: return "Microsoft Edge"
+def parse_browser(ua):
+    ua = (ua or "").lower()
+    if "edg" in ua: return "Edge"
     if "chrome" in ua and "safari" in ua: return "Chrome"
     if "safari" in ua and "chrome" not in ua: return "Safari"
     if "firefox" in ua: return "Firefox"
-    if "opera" in ua or "opr" in ua: return "Opera"
+    if "opr" in ua or "opera" in ua: return "Opera"
     return "Unknown"
 
-def geo_lookup(ip: str):
-    if not ip or ip in ("unknown", "127.0.0.1", "::1"):
+def geo_lookup(ip):
+    if not ip or ip in ("127.0.0.1", "::1", "unknown"):
         return {"country": "Unknown", "region": "", "city": ""}
 
     try:
-        resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=2)
-        if resp.status_code == 200:
-            data = resp.json()
+        r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=2)
+        if r.status_code == 200:
+            d = r.json()
             return {
-                "country": data.get("country_name") or "Unknown",
-                "region": data.get("region") or "",
-                "city": data.get("city") or ""
+                "country": d.get("country_name") or "Unknown",
+                "region": d.get("region") or "",
+                "city": d.get("city") or ""
             }
     except:
         pass
 
     return {"country": "Unknown", "region": "", "city": ""}
 
-# -----------------------------
-# LOGGING (MATCHES DB SCHEMA)
-# -----------------------------
 def log_event(event):
     try:
         ip = (
@@ -122,14 +116,11 @@ def log_event(event):
     conn.commit()
     conn.close()
 
-# -----------------------------
-# AUTH HELPERS
-# -----------------------------
 def require_login():
     return bool(session.get("logged_in"))
 
 # -----------------------------
-# BASE PAGE TEMPLATE
+# BASE HTML
 # -----------------------------
 BASE_HTML = """
 <!doctype html>
@@ -151,65 +142,18 @@ BASE_HTML = """
             min-height: 100vh;
             box-shadow: 0 0 20px rgba(0,0,0,0.06);
         }
-        .navbar-custom {
-            background:#ff4da6;
-        }
-        .navbar-brand {
-            font-weight: 700;
-        }
-        .nav-btn {
-            border-radius: 999px;
-            padding: 4px 10px;
-            font-size: 0.8rem;
-        }
-        .card-metric {
-            border-radius: 16px;
-            background: #fff5fb;
-            border: 1px solid #ffd1ec;
-        }
-        .card-metric h5 {
-            font-size: 0.9rem;
-            color: #ff4da6;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .card-metric .value {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #333;
-        }
-        .page-header {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            margin-top:1.5rem;
-            margin-bottom:1rem;
-        }
-        .page-title {
-            font-weight:700;
-            font-size:1.3rem;
-        }
-        .pill-badge {
-            border-radius:999px;
-            padding:2px 10px;
-            font-size:0.75rem;
-            background:#ffe6f7;
-            color:#ff4da6;
-        }
-        table thead {
-            background:#fff0f8;
-        }
-        table thead th {
-            border-bottom:2px solid #ffd1ec !important;
-            font-size:0.8rem;
-            text-transform:uppercase;
-            letter-spacing:0.05em;
-            color:#ff4da6;
-        }
-        table tbody td {
-            font-size:0.85rem;
-            vertical-align:middle;
-        }
+        .navbar-custom { background:#ff4da6; }
+        .navbar-brand { font-weight: 700; }
+        .nav-btn { border-radius: 999px; padding: 4px 10px; font-size: 0.8rem; }
+        .card-metric { border-radius: 16px; background: #fff5fb; border: 1px solid #ffd1ec; }
+        .card-metric h5 { font-size: 0.9rem; color: #ff4da6; text-transform: uppercase; }
+        .card-metric .value { font-size: 1.8rem; font-weight: 700; color: #333; }
+        .page-header { display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem; margin-bottom:1rem; }
+        .page-title { font-weight:700; font-size:1.3rem; }
+        .pill-badge { border-radius:999px; padding:2px 10px; font-size:0.75rem; background:#ffe6f7; color:#ff4da6; }
+        table thead { background:#fff0f8; }
+        table thead th { border-bottom:2px solid #ffd1ec !important; font-size:0.8rem; text-transform:uppercase; color:#ff4da6; }
+        table tbody td { font-size:0.85rem; vertical-align:middle; }
     </style>
 </head>
 <body>
@@ -243,65 +187,38 @@ def render_page(title, inner_html):
     return render_template_string(BASE_HTML, title=title, content=inner_html)
 
 # -----------------------------
-# LOGIN PAGE
+# LOGIN
 # -----------------------------
 @app.route("/", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         if request.form.get("username") == "admin" and request.form.get("password") == "admin":
             session["logged_in"] = True
-            session["username"] = "admin"
             log_event("Admin logged in")
-            return redirect("/dashboard?login=1")
-        return "<script>alert('Invalid username or password');window.location='/'</script>"
+            return redirect("/dashboard")
+        return "<script>alert('Invalid credentials');window.location='/'</script>"
 
-    template = """
-    <html>
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body {
-                background: linear-gradient(180deg, #ffe6f2, #ffffff);
-                height: 100vh;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-            }
-            .login-card {
-                width: 90%;
-                max-width: 380px;
-                padding: 30px;
-                border-radius: 15px;
-                background: white;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            }
-            .title {
-                text-align: center;
-                font-weight: bold;
-                color: #ff4da6;
-                margin-bottom: 20px;
-            }
-            .btn-main {
-                background: #ff4da6;
-                color: white;
-                width: 100%;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="login-card">
-            <h3 class="title">Seller Dashboard</h3>
-            <form method="POST">
-                <input name="username" class="form-control mb-3" placeholder="Username">
-                <input name="password" type="password" class="form-control mb-3" placeholder="Password">
-                <button type="submit" class="btn btn-main">Login</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
-    return render_template_string(template)
+    return render_template_string("""
+    <html><head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: linear-gradient(180deg,#ffe6f2,#fff); height:100vh; display:flex; justify-content:center; align-items:center; }
+        .login-card { width:90%; max-width:380px; padding:30px; border-radius:15px; background:white; box-shadow:0 4px 12px rgba(0,0,0,0.1); }
+        .title { text-align:center; font-weight:bold; color:#ff4da6; margin-bottom:20px; }
+        .btn-main { background:#ff4da6; color:white; width:100%; }
+    </style>
+    </head><body>
+    <div class="login-card">
+        <h3 class="title">Seller Dashboard</h3>
+        <form method="POST">
+            <input name="username" class="form-control mb-3" placeholder="Username">
+            <input name="password" type="password" class="form-control mb-3" placeholder="Password">
+            <button class="btn btn-main">Login</button>
+        </form>
+    </div>
+    </body></html>
+    """)
 
 @app.route("/logout")
 def logout():
@@ -313,54 +230,45 @@ def logout():
 # -----------------------------
 @app.route("/dashboard")
 def dashboard():
-    if not require_login():
-        return redirect("/")
-
+    if not require_login(): return redirect("/")
     log_event("Visited dashboard")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-
     c.execute("SELECT COUNT(*) FROM orders")
     total_orders = c.fetchone()[0]
-
     c.execute("SELECT SUM(sell_amount - buy_amount) FROM orders")
     profit = c.fetchone()[0] or 0
-
     c.execute("SELECT COUNT(*) FROM stocks")
     stock_count = c.fetchone()[0]
-
     conn.close()
 
     inner = f"""
-    <div class="page-header">
+    <div class='page-header'>
         <div>
-            <div class="page-title">Overview</div>
-            <div class="text-muted" style="font-size:0.85rem;">Quick snapshot of your selling performance</div>
+            <div class='page-title'>Overview</div>
+            <div class='text-muted' style='font-size:0.85rem;'>Quick snapshot of your selling performance</div>
         </div>
-        <span class="pill-badge">Live session</span>
+        <span class='pill-badge'>Live session</span>
     </div>
 
-    <div class="row g-3 mt-1">
-        <div class="col-12 col-md-4">
-            <div class="p-3 card-metric">
+    <div class='row g-3 mt-1'>
+        <div class='col-12 col-md-4'>
+            <div class='p-3 card-metric'>
                 <h5>Orders</h5>
-                <div class="value">{total_orders}</div>
-                <div class="text-muted" style="font-size:0.8rem;">Total recorded orders</div>
+                <div class='value'>{total_orders}</div>
             </div>
         </div>
-        <div class="col-12 col-md-4">
-            <div class="p-3 card-metric">
+        <div class='col-12 col-md-4'>
+            <div class='p-3 card-metric'>
                 <h5>Profit</h5>
-                <div class="value">£{profit:.2f}</div>
-                <div class="text-muted" style="font-size:0.8rem;">All-time profit</div>
+                <div class='value'>£{profit:.2f}</div>
             </div>
         </div>
-        <div class="col-12 col-md-4">
-            <div class="p-3 card-metric">
+        <div class='col-12 col-md-4'>
+            <div class='p-3 card-metric'>
                 <h5>Stock Items</h5>
-                <div class="value">{stock_count}</div>
-                <div class="text-muted" style="font-size:0.8rem;">Active inventory items</div>
+                <div class='value'>{stock_count}</div>
             </div>
         </div>
     </div>
@@ -368,13 +276,11 @@ def dashboard():
     return render_page("Dashboard", inner)
 
 # -----------------------------
-# ORDERS PAGE
+# ORDERS
 # -----------------------------
 @app.route("/orders")
 def orders():
-    if not require_login():
-        return redirect("/")
-
+    if not require_login(): return redirect("/")
     log_event("Visited orders")
 
     conn = sqlite3.connect(DB_NAME)
@@ -383,47 +289,30 @@ def orders():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = "".join([
+    table = "".join([
         f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>£{r[4]:.2f}</td><td>£{r[5]:.2f}</td><td>{r[6]}</td></tr>"
         for r in rows
     ])
 
     inner = f"""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Orders</div>
-            <div class="text-muted" style="font-size:0.85rem;">All recorded orders from your sales</div>
-        </div>
-    </div>
-
-    <div class="table-responsive mt-2">
-        <table class="table align-middle">
-            <thead>
-                <tr>
-                    <th>User</th>
-                    <th>Code</th>
-                    <th>Date</th>
-                    <th>Buy</th>
-                    <th>Sell</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows or '<tr><td colspan="6" class="text-center text-muted">No orders yet.</td></tr>'}
-            </tbody>
+    <div class='page-header'><div><div class='page-title'>Orders</div></div></div>
+    <div class='table-responsive mt-2'>
+        <table class='table align-middle'>
+            <thead><tr>
+                <th>User</th><th>Code</th><th>Date</th><th>Buy</th><th>Sell</th><th>Status</th>
+            </tr></thead>
+            <tbody>{table or "<tr><td colspan='6' class='text-center text-muted'>No orders yet.</td></tr>"}</tbody>
         </table>
     </div>
     """
     return render_page("Orders", inner)
 
 # -----------------------------
-# STOCKS PAGE
+# STOCKS
 # -----------------------------
 @app.route("/stocks")
 def stocks():
-    if not require_login():
-        return redirect("/")
-
+    if not require_login(): return redirect("/")
     log_event("Visited stocks")
 
     conn = sqlite3.connect(DB_NAME)
@@ -432,45 +321,30 @@ def stocks():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = "".join([
+    table = "".join([
         f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>£{r[3]:.2f}</td><td>{r[4]}</td></tr>"
         for r in rows
     ])
 
     inner = f"""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Stocks</div>
-            <div class="text-muted" style="font-size:0.85rem;">Your current inventory and buy prices</div>
-        </div>
-    </div>
-
-    <div class="table-responsive mt-2">
-        <table class="table align-middle">
-            <thead>
-                <tr>
-                    <th>Item</th>
-                    <th>Qty</th>
-                    <th>Buy Price</th>
-                    <th>Notes</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows or '<tr><td colspan="4" class="text-center text-muted">No stock items yet.</td></tr>'}
-            </tbody>
+    <div class='page-header'><div><div class='page-title'>Stocks</div></div></div>
+    <div class='table-responsive mt-2'>
+        <table class='table align-middle'>
+            <thead><tr>
+                <th>Item</th><th>Qty</th><th>Buy Price</th><th>Notes</th>
+            </tr></thead>
+            <tbody>{table or "<tr><td colspan='4' class='text-center text-muted'>No stock items yet.</td></tr>"}</tbody>
         </table>
     </div>
     """
     return render_page("Stocks", inner)
 
 # -----------------------------
-# PROFIT PAGE
+# PROFIT
 # -----------------------------
 @app.route("/profit")
 def profit():
-    if not require_login():
-        return redirect("/")
-
+    if not require_login(): return redirect("/")
     log_event("Visited profit")
 
     conn = sqlite3.connect(DB_NAME)
@@ -479,43 +353,28 @@ def profit():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = "".join([
+    table = "".join([
         f"<tr><td>{r[0]}</td><td>£{r[1]:.2f}</td></tr>"
         for r in rows
     ])
 
     inner = f"""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Daily Profit</div>
-            <div class="text-muted" style="font-size:0.85rem;">Profit grouped by order date</div>
-        </div>
-    </div>
-
-    <div class="table-responsive mt-2">
-        <table class="table align-middle">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Profit</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows or '<tr><td colspan="2" class="text-center text-muted">No profit data yet.</td></tr>'}
-            </tbody>
+    <div class='page-header'><div><div class='page-title'>Daily Profit</div></div></div>
+    <div class='table-responsive mt-2'>
+        <table class='table align-middle'>
+            <thead><tr><th>Date</th><th>Profit</th></tr></thead>
+            <tbody>{table or "<tr><td colspan='2' class='text-center text-muted'>No profit data yet.</td></tr>"}</tbody>
         </table>
     </div>
     """
     return render_page("Profit", inner)
 
 # -----------------------------
-# ADMIN PAGE
+# ADMIN
 # -----------------------------
 @app.route("/admin")
 def admin():
-    if not require_login():
-        return redirect("/")
-
+    if not require_login(): return redirect("/")
     log_event("Visited admin")
 
     conn = sqlite3.connect(DB_NAME)
@@ -524,16 +383,15 @@ def admin():
     rows = c.fetchall()
     conn.close()
 
-    table_rows = ""
+    table = ""
     for event, ts, ip, ua in rows:
         geo = geo_lookup(ip)
         device = parse_device(ua)
         browser = parse_browser(ua)
         loc = f"{geo['city']}, {geo['region']}, {geo['country']}".strip(", ").strip()
-        if not loc:
-            loc = "Unknown"
+        if not loc: loc = "Unknown"
 
-        table_rows += f"""
+        table += f"""
         <tr>
             <td>{event}</td>
             <td>{ts}</td>
@@ -545,29 +403,13 @@ def admin():
         """
 
     inner = f"""
-    <div class="page-header">
-        <div>
-            <div class="page-title">Admin Logs</div>
-            <div class="text-muted" style="font-size:0.85rem;">Session, IP, location, device and browser info</div>
-        </div>
-        <span class="pill-badge">Private</span>
-    </div>
-
-    <div class="table-responsive mt-2">
-        <table class="table align-middle">
-            <thead>
-                <tr>
-                    <th>Event</th>
-                    <th>Time</th>
-                    <th>IP</th>
-                    <th>Location</th>
-                    <th>Device</th>
-                    <th>Browser</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows or '<tr><td colspan="6" class="text-center text-muted">No visits logged yet.</td></tr>'}
-            </tbody>
+    <div class='page-header'><div><div class='page-title'>Admin Logs</div></div></div>
+    <div class='table-responsive mt-2'>
+        <table class='table align-middle'>
+            <thead><tr>
+                <th>Event</th><th>Time</th><th>IP</th><th>Location</th><th>Device</th><th>Browser</th>
+            </tr></thead>
+            <tbody>{table or "<tr><td colspan='6' class='text-center text-muted'>No logs yet.</td></tr>"}</tbody>
         </table>
     </div>
     """
