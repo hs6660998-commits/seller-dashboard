@@ -38,12 +38,14 @@ def init_db():
         )
     """)
 
-    # Visits / logs
+    # Visits / logs (with IP + User-Agent)
     c.execute("""
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event TEXT,
-            timestamp TEXT
+            timestamp TEXT,
+            ip TEXT,
+            user_agent TEXT
         )
     """)
 
@@ -51,10 +53,19 @@ def init_db():
     conn.close()
 
 def log_event(event):
+    try:
+        ip = request.remote_addr or "unknown"
+        ua = request.headers.get("User-Agent", "") if request else ""
+    except RuntimeError:
+        # Outside request context
+        ip = "unknown"
+        ua = ""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("INSERT INTO visits (event, timestamp) VALUES (?, ?)",
-              (event, datetime.now().isoformat(timespec="seconds")))
+    c.execute(
+        "INSERT INTO visits (event, timestamp, ip, user_agent) VALUES (?, ?, ?, ?)",
+        (event, datetime.now().isoformat(timespec="seconds"), ip, ua)
+    )
     conn.commit()
     conn.close()
 
@@ -403,6 +414,7 @@ def orders():
             VALUES (?, ?, ?, ?, ?, ?)
         """, (whatnot_username, order_code, date, buy_amount, sell_amount, status))
         conn.commit()
+        log_event(f"Order created: {order_code}")
 
     c.execute("SELECT id, whatnot_username, order_code, date, buy_amount, sell_amount, status FROM orders ORDER BY id DESC")
     rows = c.fetchall()
@@ -583,6 +595,7 @@ def stocks():
             VALUES (?, ?, ?, ?)
         """, (item_name, quantity, buy_price, notes))
         conn.commit()
+        log_event(f"Stock added: {item_name}")
 
     c.execute("SELECT id, item_name, quantity, buy_price, notes FROM stocks ORDER BY id DESC")
     rows = c.fetchall()
@@ -787,7 +800,7 @@ def profit_data():
     return jsonify({"labels": labels, "values": values})
 
 # -----------------------------
-# ADMIN PANEL (FOR YOU)
+# ADMIN PANEL (WITH IP + DEVICE)
 # -----------------------------
 @app.route("/admin")
 def admin_panel():
@@ -808,7 +821,7 @@ def admin_panel():
     c.execute("SELECT COUNT(*) FROM stocks")
     total_stocks = c.fetchone()[0] or 0
 
-    c.execute("SELECT id, event, timestamp FROM visits ORDER BY id DESC LIMIT 50")
+    c.execute("SELECT id, event, timestamp, ip, user_agent FROM visits ORDER BY id DESC LIMIT 50")
     rows = c.fetchall()
 
     conn.close()
@@ -833,6 +846,12 @@ def admin_panel():
         <style>
             body { background: #fafafa; }
             .card { border-radius: 15px; }
+            .ua-cell {
+                max-width: 260px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
         </style>
     </head>
 
@@ -863,7 +882,7 @@ def admin_panel():
         </div>
 
         <div class="card p-3 shadow-sm">
-            <h5>Recent Activity</h5>
+            <h5>Recent Activity (with IP & Device)</h5>
             <div class="table-responsive mt-2">
                 <table class="table table-sm align-middle">
                     <thead>
@@ -871,6 +890,8 @@ def admin_panel():
                             <th>ID</th>
                             <th>Event</th>
                             <th>Timestamp</th>
+                            <th>IP</th>
+                            <th>Device / User-Agent</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -879,6 +900,8 @@ def admin_panel():
                             <td>{{ v.id }}</td>
                             <td>{{ v.event }}</td>
                             <td>{{ v.timestamp }}</td>
+                            <td>{{ v.ip }}</td>
+                            <td class="ua-cell" title="{{ v.user_agent }}">{{ v.user_agent }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -894,14 +917,22 @@ def admin_panel():
 
     visits = []
     for r in rows:
-        visits.append({"id": r[0], "event": r[1], "timestamp": r[2]})
+        visits.append({
+            "id": r[0],
+            "event": r[1],
+            "timestamp": r[2],
+            "ip": r[3],
+            "user_agent": r[4]
+        })
 
-    return render_template_string(template,
-                                  title="Admin Panel",
-                                  total_visits=total_visits,
-                                  total_orders=total_orders,
-                                  total_stocks=total_stocks,
-                                  visits=visits)
+    return render_template_string(
+        template,
+        title="Admin Panel",
+        total_visits=total_visits,
+        total_orders=total_orders,
+        total_stocks=total_stocks,
+        visits=visits
+    )
 
 # -----------------------------
 # RUN
