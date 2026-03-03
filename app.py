@@ -1,7 +1,10 @@
 import os
 import sqlite3
 from datetime import datetime
-from flask import Flask, request, redirect, session, render_template_string
+from flask import (
+    Flask, request, redirect, session,
+    render_template_string, jsonify
+)
 import requests
 
 app = Flask(__name__)
@@ -10,11 +13,16 @@ app.secret_key = "super-secret-key-change-this"
 DB_NAME = "data.db"
 
 # -----------------------------
-# DATABASE SETUP
+# DATABASE SETUP (FULL RESET)
 # -----------------------------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+
+    # Drop old tables for a clean reset
+    c.execute("DROP TABLE IF EXISTS orders")
+    c.execute("DROP TABLE IF EXISTS stocks")
+    c.execute("DROP TABLE IF EXISTS visits")
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS orders (
@@ -24,6 +32,7 @@ def init_db():
             date TEXT,
             buy_amount REAL,
             sell_amount REAL,
+            profit REAL,
             status TEXT
         )
     """)
@@ -44,6 +53,11 @@ def init_db():
             event TEXT,
             timestamp TEXT,
             ip TEXT,
+            country TEXT,
+            region TEXT,
+            city TEXT,
+            device TEXT,
+            browser TEXT,
             user_agent TEXT
         )
     """)
@@ -77,12 +91,14 @@ def parse_browser(ua):
 
 def geo_lookup(ip):
     if not ip or ip in ("127.0.0.1", "::1", "unknown"):
-        return {"country": "Unknown", "region": "", "city": ""}
+        return {"country": "Local", "region": "", "city": ""}
 
     try:
         r = requests.get(f"https://ipapi.co/{ip}/json/", timeout=2)
         if r.status_code == 200:
             d = r.json()
+            if d.get("error"):
+                return {"country": "Unknown", "region": "", "city": ""}
             return {
                 "country": d.get("country_name") or "Unknown",
                 "region": d.get("region") or "",
@@ -101,17 +117,33 @@ def log_event(event):
             or request.remote_addr
             or "unknown"
         ).split(",")[0].strip()
-
         ua = request.headers.get("User-Agent", "")
     except RuntimeError:
         ip = "unknown"
         ua = ""
 
+    device = parse_device(ua)
+    browser = parse_browser(ua)
+    geo = geo_lookup(ip)
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO visits (event, timestamp, ip, user_agent) VALUES (?, ?, ?, ?)",
-        (event, datetime.now().isoformat(timespec="seconds"), ip, ua)
+        """
+        INSERT INTO visits (event, timestamp, ip, country, region, city, device, browser, user_agent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event,
+            datetime.now().isoformat(timespec="seconds"),
+            ip,
+            geo["country"],
+            geo["region"],
+            geo["city"],
+            device,
+            browser,
+            ua
+        )
     )
     conn.commit()
     conn.close()
@@ -130,6 +162,7 @@ BASE_HTML = """
     <title>{{ title }} - Seller Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <style>
         body {
             background: linear-gradient(180deg, #ffe6f2, #ffffff);
@@ -154,6 +187,7 @@ BASE_HTML = """
         table thead { background:#fff0f8; }
         table thead th { border-bottom:2px solid #ffd1ec !important; font-size:0.8rem; text-transform:uppercase; color:#ff4da6; }
         table tbody td { font-size:0.85rem; vertical-align:middle; }
+        .btn-main { background:#ff4da6; color:white; }
     </style>
 </head>
 <body>
@@ -230,14 +264,15 @@ def logout():
 # -----------------------------
 @app.route("/dashboard")
 def dashboard():
-    if not require_login(): return redirect("/")
+    if not require_login():
+        return redirect("/")
     log_event("Visited dashboard")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM orders")
     total_orders = c.fetchone()[0]
-    c.execute("SELECT SUM(sell_amount - buy_amount) FROM orders")
+    c.execute("SELECT SUM(profit) FROM orders")
     profit = c.fetchone()[0] or 0
     c.execute("SELECT COUNT(*) FROM stocks")
     stock_count = c.fetchone()[0]
@@ -276,65 +311,267 @@ def dashboard():
     return render_page("Dashboard", inner)
 
 # -----------------------------
-# ORDERS
+# ORDERS (LIST + ADD + CHANGE STATUS)
 # -----------------------------
-@app.route("/orders")
+@app.route("/orders", methods=["GET", "POST"])
 def orders():
-    if not require_login(): return redirect("/")
+    if not require_login():
+        return redirect("/")
     log_event("Visited orders")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT * FROM orders ORDER BY id DESC")
+
+    # Handle new order (from modal)
+    if request.method == "POST" and request.form.get("action") == "add_order":
+        username = request.form.get("whatnot_username", "").strip()
+        code = request.form.get("order_code", "").strip()
+        buy = float(request.form.get("buy_amount") or 0)
+        sell = float(request.form.get("sell_amount") or 0)
+        profit = sell - buy
+        date = datetime.now().strftime("%Y-%m-%d")
+        status = "Processed"
+
+        c.execute("""
+            INSERT INTO orders (whatnot_username, order_code, date, buy_amount, sell_amount, profit, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (username, code, date, buy, sell, profit, status))
+        conn.commit()
+
+    c.execute("SELECT id, whatnot_username, order_code, date, buy_amount, sell_amount, profit, status FROM orders ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
 
-    table = "".join([
-        f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>£{r[4]:.2f}</td><td>£{r[5]:.2f}</td><td>{r[6]}</td></tr>"
-        for r in rows
-    ])
+    # Build table rows with inline modals
+    table_rows = ""
+    for r in rows:
+        oid, user, code, date, buy, sell, profit, status = r
+        modal_id = f"statusModal_{oid}"
+        table_rows += f"""
+        <tr id="order_row_{oid}">
+            <td>{user}</td>
+            <td>{code}</td>
+            <td>{date}</td>
+            <td>£{buy:.2f}</td>
+            <td>£{sell:.2f}</td>
+            <td>£{profit:.2f}</td>
+            <td><span class="badge bg-secondary" id="status_badge_{oid}">{status}</span></td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#{modal_id}">
+                    Change Status
+                </button>
+            </td>
+        </tr>
+
+        <div class="modal fade" id="{modal_id}" tabindex="-1" aria-hidden="true">
+          <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">Change Status - {code}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <select class="form-select" id="status_select_{oid}">
+                    <option value="Processed" {"selected" if status=="Processed" else ""}>Processed</option>
+                    <option value="Shipped" {"selected" if status=="Shipped" else ""}>Shipped</option>
+                    <option value="Delivered" {"selected" if status=="Delivered" else ""}>Delivered</option>
+                </select>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-main" onclick="updateStatus({oid})">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        """
 
     inner = f"""
-    <div class='page-header'><div><div class='page-title'>Orders</div></div></div>
+    <div class='page-header'>
+        <div><div class='page-title'>Orders</div></div>
+        <button class="btn btn-main btn-sm" data-bs-toggle="modal" data-bs-target="#addOrderModal">Add Order</button>
+    </div>
+
     <div class='table-responsive mt-2'>
         <table class='table align-middle'>
             <thead><tr>
-                <th>User</th><th>Code</th><th>Date</th><th>Buy</th><th>Sell</th><th>Status</th>
+                <th>User</th><th>Code</th><th>Date</th><th>Buy</th><th>Sell</th><th>Profit</th><th>Status</th><th></th>
             </tr></thead>
-            <tbody>{table or "<tr><td colspan='6' class='text-center text-muted'>No orders yet.</td></tr>"}</tbody>
+            <tbody>
+                {table_rows or "<tr><td colspan='8' class='text-center text-muted'>No orders yet.</td></tr>"}
+            </tbody>
         </table>
     </div>
+
+    <!-- Add Order Modal -->
+    <div class="modal fade" id="addOrderModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <form method="POST">
+            <input type="hidden" name="action" value="add_order">
+            <div class="modal-header">
+              <h5 class="modal-title">Add Order</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-2">
+                <label class="form-label">Whatnot Username</label>
+                <input name="whatnot_username" class="form-control" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Order ID</label>
+                <input name="order_code" class="form-control" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Buy Amount (£)</label>
+                <input name="buy_amount" type="number" step="0.01" class="form-control" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Sell Amount (£)</label>
+                <input name="sell_amount" type="number" step="0.01" class="form-control" required>
+              </div>
+              <small class="text-muted">Profit will be calculated automatically.</small>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="submit" class="btn btn-main">Save Order</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    async function updateStatus(orderId) {{
+        const select = document.getElementById('status_select_' + orderId);
+        const newStatus = select.value;
+        try {{
+            const res = await fetch('/update_order_status', {{
+                method: 'POST',
+                headers: {{
+                    'Content-Type': 'application/json'
+                }},
+                body: JSON.stringify({{ id: orderId, status: newStatus }})
+            }});
+            const data = await res.json();
+            if (data.success) {{
+                const badge = document.getElementById('status_badge_' + orderId);
+                badge.textContent = newStatus;
+                badge.className = 'badge bg-secondary';
+                var modalEl = document.getElementById('statusModal_' + orderId);
+                var modal = bootstrap.Modal.getInstance(modalEl);
+                modal.hide();
+            }} else {{
+                alert('Failed to update status');
+            }}
+        }} catch (e) {{
+            alert('Error updating status');
+        }}
+    }}
+    </script>
     """
     return render_page("Orders", inner)
 
+@app.route("/update_order_status", methods=["POST"])
+def update_order_status():
+    if not require_login():
+        return jsonify({"success": False}), 403
+    data = request.get_json() or {}
+    oid = data.get("id")
+    status = data.get("status")
+    if not oid or status not in ["Processed", "Shipped", "Delivered"]:
+        return jsonify({"success": False}), 400
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status=? WHERE id=?", (status, oid))
+    conn.commit()
+    conn.close()
+    log_event(f"Changed order {oid} status to {status}")
+    return jsonify({"success": True})
+
 # -----------------------------
-# STOCKS
+# STOCKS (LIST + ADD)
 # -----------------------------
-@app.route("/stocks")
+@app.route("/stocks", methods=["GET", "POST"])
 def stocks():
-    if not require_login(): return redirect("/")
+    if not require_login():
+        return redirect("/")
     log_event("Visited stocks")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT * FROM stocks ORDER BY id DESC")
+
+    if request.method == "POST" and request.form.get("action") == "add_stock":
+        name = request.form.get("item_name", "").strip()
+        qty = int(request.form.get("quantity") or 0)
+        buy_price = float(request.form.get("buy_price") or 0)
+        notes = request.form.get("notes", "").strip()
+        c.execute("""
+            INSERT INTO stocks (item_name, quantity, buy_price, notes)
+            VALUES (?, ?, ?, ?)
+        """, (name, qty, buy_price, notes))
+        conn.commit()
+
+    c.execute("SELECT id, item_name, quantity, buy_price, notes FROM stocks ORDER BY id DESC")
     rows = c.fetchall()
     conn.close()
 
-    table = "".join([
+    table_rows = "".join([
         f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>£{r[3]:.2f}</td><td>{r[4]}</td></tr>"
         for r in rows
     ])
 
     inner = f"""
-    <div class='page-header'><div><div class='page-title'>Stocks</div></div></div>
+    <div class='page-header'>
+        <div><div class='page-title'>Stocks</div></div>
+        <button class="btn btn-main btn-sm" data-bs-toggle="modal" data-bs-target="#addStockModal">Add Stock</button>
+    </div>
+
     <div class='table-responsive mt-2'>
         <table class='table align-middle'>
             <thead><tr>
                 <th>Item</th><th>Qty</th><th>Buy Price</th><th>Notes</th>
             </tr></thead>
-            <tbody>{table or "<tr><td colspan='4' class='text-center text-muted'>No stock items yet.</td></tr>"}</tbody>
+            <tbody>{table_rows or "<tr><td colspan='4' class='text-center text-muted'>No stock items yet.</td></tr>"}</tbody>
         </table>
+    </div>
+
+    <!-- Add Stock Modal -->
+    <div class="modal fade" id="addStockModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <form method="POST">
+            <input type="hidden" name="action" value="add_stock">
+            <div class="modal-header">
+              <h5 class="modal-title">Add Stock</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-2">
+                <label class="form-label">Item Name</label>
+                <input name="item_name" class="form-control" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Quantity</label>
+                <input name="quantity" type="number" class="form-control" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Buy Price (£)</label>
+                <input name="buy_price" type="number" step="0.01" class="form-control" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Notes</label>
+                <textarea name="notes" class="form-control" rows="2"></textarea>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="submit" class="btn btn-main">Save Stock</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
     """
     return render_page("Stocks", inner)
@@ -344,12 +581,13 @@ def stocks():
 # -----------------------------
 @app.route("/profit")
 def profit():
-    if not require_login(): return redirect("/")
+    if not require_login():
+        return redirect("/")
     log_event("Visited profit")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT date, SUM(sell_amount - buy_amount) FROM orders GROUP BY date ORDER BY date DESC")
+    c.execute("SELECT date, SUM(profit) FROM orders GROUP BY date ORDER BY date DESC")
     rows = c.fetchall()
     conn.close()
 
@@ -374,23 +612,24 @@ def profit():
 # -----------------------------
 @app.route("/admin")
 def admin():
-    if not require_login(): return redirect("/")
+    if not require_login():
+        return redirect("/")
     log_event("Visited admin")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT event, timestamp, ip, user_agent FROM visits ORDER BY id DESC LIMIT 200")
+    c.execute("""
+        SELECT event, timestamp, ip, country, region, city, device, browser
+        FROM visits
+        ORDER BY id DESC LIMIT 200
+    """)
     rows = c.fetchall()
     conn.close()
 
     table = ""
-    for event, ts, ip, ua in rows:
-        geo = geo_lookup(ip)
-        device = parse_device(ua)
-        browser = parse_browser(ua)
-        loc = f"{geo['city']}, {geo['region']}, {geo['country']}".strip(", ").strip()
-        if not loc: loc = "Unknown"
-
+    for event, ts, ip, country, region, city, device, browser in rows:
+        loc_parts = [city, region, country]
+        loc = ", ".join([p for p in loc_parts if p]).strip() or "Unknown"
         table += f"""
         <tr>
             <td>{event}</td>
