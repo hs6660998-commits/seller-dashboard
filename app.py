@@ -40,18 +40,13 @@ def init_db():
         )
     """)
 
-    # Visits table (IP + User-Agent + Geo)
+    # Visits table (IP + User-Agent only; geo/device/browser computed on read)
     c.execute("""
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event TEXT,
             timestamp TEXT,
             ip TEXT,
-            country TEXT,
-            region TEXT,
-            city TEXT,
-            device TEXT,
-            browser TEXT,
             user_agent TEXT
         )
     """)
@@ -66,7 +61,7 @@ init_db()
 # -----------------------------
 def parse_device(user_agent: str):
     ua = (user_agent or "").lower()
-    device = "Unknown device"
+    device = "Unknown"
 
     if "iphone" in ua:
         device = "iPhone"
@@ -85,7 +80,7 @@ def parse_device(user_agent: str):
 
 def parse_browser(user_agent: str):
     ua = (user_agent or "").lower()
-    browser = "Unknown browser"
+    browser = "Unknown"
 
     if "edg" in ua:
         browser = "Microsoft Edge"
@@ -123,31 +118,18 @@ def geo_lookup(ip: str):
 # -----------------------------
 def log_event(event):
     try:
-        ip = request.remote_addr or "unknown"
-        ua = request.headers.get("User-Agent", "")
+        # Prefer real client IP if behind proxy
+        ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+        ua = request.headers.get("User-Agent", "") if request else ""
     except RuntimeError:
         ip = "unknown"
         ua = ""
 
-    geo = geo_lookup(ip)
-    device = parse_device(ua)
-    browser = parse_browser(ua)
-
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO visits (event, timestamp, ip, country, region, city, device, browser, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            event,
-            datetime.now().isoformat(timespec="seconds"),
-            ip,
-            geo["country"],
-            geo["region"],
-            geo["city"],
-            device,
-            browser,
-            ua
-        )
+        "INSERT INTO visits (event, timestamp, ip, user_agent) VALUES (?, ?, ?, ?)",
+        (event, datetime.now().isoformat(timespec="seconds"), ip, ua)
     )
     conn.commit()
     conn.close()
@@ -157,6 +139,120 @@ def log_event(event):
 # -----------------------------
 def require_login():
     return bool(session.get("logged_in"))
+
+# -----------------------------
+# BASE PAGE RENDER
+# -----------------------------
+BASE_HTML = """
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{{ title }} - Seller Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {{
+            background: linear-gradient(180deg, #ffe6f2, #ffffff);
+            min-height: 100vh;
+        }}
+        .app-shell {{
+            max-width: 900px;
+            margin: 0 auto;
+            background: #ffffff;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0,0,0,0.06);
+        }}
+        .navbar-custom {{
+            background:#ff4da6;
+        }}
+        .navbar-brand {{
+            font-weight: 700;
+        }}
+        .nav-btn {{
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 0.8rem;
+        }}
+        .card-metric {{
+            border-radius: 16px;
+            background: #fff5fb;
+            border: 1px solid #ffd1ec;
+        }}
+        .card-metric h5 {{
+            font-size: 0.9rem;
+            color: #ff4da6;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        .card-metric .value {{
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #333;
+        }}
+        .page-header {{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            margin-top:1.5rem;
+            margin-bottom:1rem;
+        }}
+        .page-title {{
+            font-weight:700;
+            font-size:1.3rem;
+        }}
+        .pill-badge {{
+            border-radius:999px;
+            padding:2px 10px;
+            font-size:0.75rem;
+            background:#ffe6f7;
+            color:#ff4da6;
+        }}
+        table thead {{
+            background:#fff0f8;
+        }}
+        table thead th {{
+            border-bottom:2px solid #ffd1ec !important;
+            font-size:0.8rem;
+            text-transform:uppercase;
+            letter-spacing:0.05em;
+            color:#ff4da6;
+        }}
+        table tbody td {{
+            font-size:0.85rem;
+            vertical-align:middle;
+        }}
+    </style>
+</head>
+<body>
+<div class="app-shell">
+    <nav class="navbar navbar-dark navbar-custom shadow-sm">
+      <div class="container-fluid">
+        <div class="d-flex align-items-center">
+            <img src="/icon-192.png" width="32" height="32" style="border-radius:10px;" class="me-2">
+            <span class="navbar-brand">{{ title }}</span>
+        </div>
+        <div class="d-flex gap-1">
+            <a href="/dashboard" class="btn btn-sm btn-light nav-btn">Dashboard</a>
+            <a href="/orders" class="btn btn-sm btn-light nav-btn">Orders</a>
+            <a href="/stocks" class="btn btn-sm btn-light nav-btn">Stocks</a>
+            <a href="/profit" class="btn btn-sm btn-light nav-btn">Profit</a>
+            <a href="/admin" class="btn btn-sm btn-light nav-btn">Admin</a>
+            <a href="/logout" class="btn btn-sm btn-outline-light nav-btn">Logout</a>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container py-3">
+        {{ content|safe }}
+    </div>
+</div>
+</body>
+</html>
+"""
+
+def render_page(title, inner_html):
+    return render_template_string(BASE_HTML, title=title, content=inner_html)
 
 # -----------------------------
 # LOGIN PAGE
@@ -182,7 +278,6 @@ def login():
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-
         <style>
             body {
                 background: linear-gradient(180deg, #ffe6f2, #ffffff);
@@ -212,11 +307,9 @@ def login():
             }
         </style>
     </head>
-
     <body>
         <div class="login-card">
             <h3 class="title">Seller Dashboard</h3>
-
             <form method="POST">
                 <input name="username" class="form-control mb-3" placeholder="Username">
                 <input name="password" type="password" class="form-control mb-3" placeholder="Password">
@@ -232,28 +325,6 @@ def login():
 def logout():
     session.clear()
     return redirect("/")
-
-# -----------------------------
-# NAVBAR
-# -----------------------------
-NAVBAR = """
-<nav class="navbar navbar-dark shadow-sm" style="background:#ff4da6;">
-  <div class="container-fluid">
-    <div class="d-flex align-items-center">
-        <img src="/icon-192.png" width="32" height="32" style="border-radius:10px;" class="me-2">
-        <span class="navbar-brand fw-bold">{{ title }}</span>
-    </div>
-    <div class="d-flex gap-2">
-        <a href="/dashboard" class="btn btn-sm btn-light">Dashboard</a>
-        <a href="/orders" class="btn btn-sm btn-light">Orders</a>
-        <a href="/stocks" class="btn btn-sm btn-light">Stocks</a>
-        <a href="/profit" class="btn btn-sm btn-light">Profit</a>
-        <a href="/admin" class="btn btn-sm btn-light">Admin</a>
-        <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
-    </div>
-  </div>
-</nav>
-"""
 
 # -----------------------------
 # DASHBOARD
@@ -279,33 +350,40 @@ def dashboard():
 
     conn.close()
 
-    template = f"""
-    {NAVBAR}
-    <div class="container mt-4">
-        <h3>Dashboard Overview</h3>
-        <div class="row mt-3">
-            <div class="col-4">
-                <div class="p-3 bg-light rounded shadow-sm">
-                    <h5>Total Orders</h5>
-                    <p class="fs-3">{total_orders}</p>
-                </div>
+    inner = f"""
+    <div class="page-header">
+        <div>
+            <div class="page-title">Overview</div>
+            <div class="text-muted" style="font-size:0.85rem;">Quick snapshot of your selling performance</div>
+        </div>
+        <span class="pill-badge">Live session</span>
+    </div>
+
+    <div class="row g-3 mt-1">
+        <div class="col-12 col-md-4">
+            <div class="p-3 card-metric">
+                <h5>Orders</h5>
+                <div class="value">{total_orders}</div>
+                <div class="text-muted" style="font-size:0.8rem;">Total recorded orders</div>
             </div>
-            <div class="col-4">
-                <div class="p-3 bg-light rounded shadow-sm">
-                    <h5>Total Profit</h5>
-                    <p class="fs-3">£{profit:.2f}</p>
-                </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="p-3 card-metric">
+                <h5>Profit</h5>
+                <div class="value">£{profit:.2f}</div>
+                <div class="text-muted" style="font-size:0.8rem;">All-time profit</div>
             </div>
-            <div class="col-4">
-                <div class="p-3 bg-light rounded shadow-sm">
-                    <h5>Stock Items</h5>
-                    <p class="fs-3">{stock_count}</p>
-                </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="p-3 card-metric">
+                <h5>Stock Items</h5>
+                <div class="value">{stock_count}</div>
+                <div class="text-muted" style="font-size:0.8rem;">Active inventory items</div>
             </div>
         </div>
     </div>
     """
-    return render_template_string(template)
+    return render_page("Dashboard", inner)
 
 # -----------------------------
 # ORDERS PAGE
@@ -323,22 +401,46 @@ def orders():
     rows = c.fetchall()
     conn.close()
 
-    table = "".join([
-        f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>£{r[4]}</td><td>£{r[5]}</td><td>{r[6]}</td></tr>"
-        for r in rows
-    ])
+    table_rows = ""
+    for r in rows:
+        table_rows += f"""
+        <tr>
+            <td>{r[1]}</td>
+            <td>{r[2]}</td>
+            <td>{r[3]}</td>
+            <td>£{r[4]:.2f}</td>
+            <td>£{r[5]:.2f}</td>
+            <td>{r[6]}</td>
+        </tr>
+        """
 
-    template = f"""
-    {NAVBAR}
-    <div class="container mt-4">
-        <h3>Orders</h3>
-        <table class="table table-striped mt-3">
-            <tr><th>User</th><th>Code</th><th>Date</th><th>Buy</th><th>Sell</th><th>Status</th></tr>
-            {table}
+    inner = f"""
+    <div class="page-header">
+        <div>
+            <div class="page-title">Orders</div>
+            <div class="text-muted" style="font-size:0.85rem;">All recorded orders from your sales</div>
+        </div>
+    </div>
+
+    <div class="table-responsive mt-2">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>User</th>
+                    <th>Code</th>
+                    <th>Date</th>
+                    <th>Buy</th>
+                    <th>Sell</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows or '<tr><td colspan="6" class="text-center text-muted">No orders yet.</td></tr>'}
+            </tbody>
         </table>
     </div>
     """
-    return render_template_string(template)
+    return render_page("Orders", inner)
 
 # -----------------------------
 # STOCKS PAGE
@@ -356,22 +458,42 @@ def stocks():
     rows = c.fetchall()
     conn.close()
 
-    table = "".join([
-        f"<tr><td>{r[1]}</td><td>{r[2]}</td><td>£{r[3]}</td><td>{r[4]}</td></tr>"
-        for r in rows
-    ])
+    table_rows = ""
+    for r in rows:
+        table_rows += f"""
+        <tr>
+            <td>{r[1]}</td>
+            <td>{r[2]}</td>
+            <td>£{r[3]:.2f}</td>
+            <td>{r[4]}</td>
+        </tr>
+        """
 
-    template = f"""
-    {NAVBAR}
-    <div class="container mt-4">
-        <h3>Stocks</h3>
-        <table class="table table-striped mt-3">
-            <tr><th>Item</th><th>Qty</th><th>Buy Price</th><th>Notes</th></tr>
-            {table}
+    inner = f"""
+    <div class="page-header">
+        <div>
+            <div class="page-title">Stocks</div>
+            <div class="text-muted" style="font-size:0.85rem;">Your current inventory and buy prices</div>
+        </div>
+    </div>
+
+    <div class="table-responsive mt-2">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Qty</th>
+                    <th>Buy Price</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows or '<tr><td colspan="4" class="text-center text-muted">No stock items yet.</td></tr>'}
+            </tbody>
         </table>
     </div>
     """
-    return render_template_string(template)
+    return render_page("Stocks", inner)
 
 # -----------------------------
 # PROFIT PAGE
@@ -385,29 +507,45 @@ def profit():
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT date, SUM(sell_amount - buy_amount) FROM orders GROUP BY date")
+    c.execute("SELECT date, SUM(sell_amount - buy_amount) FROM orders GROUP BY date ORDER BY date DESC")
     rows = c.fetchall()
     conn.close()
 
-    table = "".join([
-        f"<tr><td>{r[0]}</td><td>£{r[1]:.2f}</td></tr>"
-        for r in rows
-    ])
+    table_rows = ""
+    for r in rows:
+        table_rows += f"""
+        <tr>
+            <td>{r[0]}</td>
+            <td>£{r[1]:.2f}</td>
+        </tr>
+        """
 
-    template = f"""
-    {NAVBAR}
-    <div class="container mt-4">
-        <h3>Daily Profit</h3>
-        <table class="table table-striped mt-3">
-            <tr><th>Date</th><th>Profit</th></tr>
-            {table}
+    inner = f"""
+    <div class="page-header">
+        <div>
+            <div class="page-title">Daily Profit</div>
+            <div class="text-muted" style="font-size:0.85rem;">Profit grouped by order date</div>
+        </div>
+    </div>
+
+    <div class="table-responsive mt-2">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Profit</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows or '<tr><td colspan="2" class="text-center text-muted">No profit data yet.</td></tr>'}
+            </tbody>
         </table>
     </div>
     """
-    return render_template_string(template)
+    return render_page("Profit", inner)
 
 # -----------------------------
-# ADMIN PAGE (VISIT LOGS)
+# ADMIN PAGE (VISIT LOGS + GEO/DEVICE/BROWSER)
 # -----------------------------
 @app.route("/admin")
 def admin():
@@ -418,26 +556,57 @@ def admin():
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT event, timestamp, ip, country, region, city, device, browser FROM visits ORDER BY id DESC LIMIT 200")
+    c.execute("SELECT event, timestamp, ip, user_agent FROM visits ORDER BY id DESC LIMIT 200")
     rows = c.fetchall()
     conn.close()
 
-    table = "".join([
-        f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td><td>{r[5]}</td><td>{r[6]}</td><td>{r[7]}</td></tr>"
-        for r in rows
-    ])
+    table_rows = ""
+    for event, ts, ip, ua in rows:
+        geo = geo_lookup(ip)
+        device = parse_device(ua)
+        browser = parse_browser(ua)
+        loc = f"{geo['city']}, {geo['region']}, {geo['country']}".strip().strip(", ")
+        if not loc:
+            loc = "Unknown"
+        table_rows += f"""
+        <tr>
+            <td>{event}</td>
+            <td>{ts}</td>
+            <td>{ip}</td>
+            <td>{loc}</td>
+            <td>{device}</td>
+            <td>{browser}</td>
+        </tr>
+        """
 
-    template = f"""
-    {NAVBAR}
-    <div class="container mt-4">
-        <h3>Admin Logs</h3>
-        <table class="table table-striped mt-3">
-            <tr><th>Event</th><th>Time</th><th>IP</th><th>Country</th><th>Region</th><th>City</th><th>Device</th><th>Browser</th></tr>
-            {table}
+    inner = f"""
+    <div class="page-header">
+        <div>
+            <div class="page-title">Admin Logs</div>
+            <div class="text-muted" style="font-size:0.85rem;">Session, IP, location, device and browser info</div>
+        </div>
+        <span class="pill-badge">Private</span>
+    </div>
+
+    <div class="table-responsive mt-2">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Event</th>
+                    <th>Time</th>
+                    <th>IP</th>
+                    <th>Location</th>
+                    <th>Device</th>
+                    <th>Browser</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows or '<tr><td colspan="6" class="text-center text-muted">No visits logged yet.</td></tr>'}
+            </tbody>
         </table>
     </div>
     """
-    return render_template_string(template)
+    return render_page("Admin", inner)
 
 # -----------------------------
 # RUN
