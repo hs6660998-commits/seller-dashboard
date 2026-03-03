@@ -1,6 +1,7 @@
 from flask import Flask, request, redirect, session, jsonify, render_template_string
 import sqlite3
 from datetime import datetime
+import requests
 
 app = Flask(__name__)
 app.secret_key = "super-secret-key-change-this"
@@ -57,7 +58,6 @@ def log_event(event):
         ip = request.remote_addr or "unknown"
         ua = request.headers.get("User-Agent", "") if request else ""
     except RuntimeError:
-        # Outside request context
         ip = "unknown"
         ua = ""
     conn = sqlite3.connect(DB_NAME)
@@ -70,6 +70,83 @@ def log_event(event):
     conn.close()
 
 init_db()
+
+# -----------------------------
+# HELPERS: DEVICE / BROWSER / GEO
+# -----------------------------
+def parse_device(user_agent: str):
+    ua = (user_agent or "").lower()
+    device = "Unknown device"
+    icon = "📱"
+
+    if "iphone" in ua:
+        device = "iPhone"
+        icon = "📱"
+    elif "ipad" in ua:
+        device = "iPad"
+        icon = "📱"
+    elif "android" in ua:
+        device = "Android"
+        icon = "📱"
+    elif "windows" in ua:
+        device = "Windows PC"
+        icon = "💻"
+    elif "macintosh" in ua or "mac os" in ua:
+        device = "Mac"
+        icon = "💻"
+    elif "linux" in ua:
+        device = "Linux"
+        icon = "💻"
+
+    return device, icon
+
+def parse_browser(user_agent: str):
+    ua = (user_agent or "").lower()
+    browser = "Unknown browser"
+    icon = "🌐"
+
+    if "edg" in ua:
+        browser = "Microsoft Edge"
+        icon = "🟦"
+    elif "chrome" in ua and "safari" in ua:
+        browser = "Chrome"
+        icon = "🟦"
+    elif "safari" in ua and "chrome" not in ua:
+        browser = "Safari"
+        icon = "🧭"
+    elif "firefox" in ua:
+        browser = "Firefox"
+        icon = "🦊"
+    elif "opera" in ua or "opr" in ua:
+        browser = "Opera"
+        icon = "🟥"
+
+    return browser, icon
+
+def geo_lookup(ip: str):
+    # On-demand lookup via ipapi.co
+    if not ip or ip in ("unknown", "127.0.0.1", "::1"):
+        return {
+            "country": "Unknown",
+            "region": "",
+            "city": ""
+        }
+    try:
+        resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=2)
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "country": data.get("country_name") or "Unknown",
+                "region": data.get("region") or "",
+                "city": data.get("city") or ""
+            }
+    except Exception:
+        pass
+    return {
+        "country": "Unknown",
+        "region": "",
+        "city": ""
+    }
 
 # -----------------------------
 # AUTH HELPERS
@@ -407,7 +484,7 @@ def orders():
         date = request.form.get("date")
         buy_amount = float(request.form.get("buy_amount") or 0)
         sell_amount = float(request.form.get("sell_amount") or 0)
-        status = "Pending"  # default
+        status = "Pending"
 
         c.execute("""
             INSERT INTO orders (whatnot_username, order_code, date, buy_amount, sell_amount, status)
@@ -800,7 +877,7 @@ def profit_data():
     return jsonify({"labels": labels, "values": values})
 
 # -----------------------------
-# ADMIN PANEL (WITH IP + DEVICE)
+# ADMIN PANEL (WITH IP + DEVICE + USER DATA BUTTON)
 # -----------------------------
 @app.route("/admin")
 def admin_panel():
@@ -861,23 +938,26 @@ def admin_panel():
     <div class="container mt-4">
 
         <div class="row mb-3">
-            <div class="col-12 col-md-4 mb-3">
+            <div class="col-12 col-md-3 mb-3">
                 <div class="card p-3 shadow-sm">
                     <h6>Total Visits</h6>
                     <h3>{{ total_visits }}</h3>
                 </div>
             </div>
-            <div class="col-12 col-md-4 mb-3">
+            <div class="col-12 col-md-3 mb-3">
                 <div class="card p-3 shadow-sm">
                     <h6>Total Orders</h6>
                     <h3>{{ total_orders }}</h3>
                 </div>
             </div>
-            <div class="col-12 col-md-4 mb-3">
+            <div class="col-12 col-md-3 mb-3">
                 <div class="card p-3 shadow-sm">
                     <h6>Total Stock Items</h6>
                     <h3>{{ total_stocks }}</h3>
                 </div>
+            </div>
+            <div class="col-12 col-md-3 mb-3 d-flex align-items-end">
+                <a href="/admin/users" class="btn btn-dark w-100">User Information</a>
             </div>
         </div>
 
@@ -892,6 +972,7 @@ def admin_panel():
                             <th>Timestamp</th>
                             <th>IP</th>
                             <th>Device / User-Agent</th>
+                            <th>User Data</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -902,6 +983,15 @@ def admin_panel():
                             <td>{{ v.timestamp }}</td>
                             <td>{{ v.ip }}</td>
                             <td class="ua-cell" title="{{ v.user_agent }}">{{ v.user_agent }}</td>
+                            <td>
+                                {% if v.ip and v.ip != 'unknown' %}
+                                <a href="/admin/user/{{ v.ip }}" class="btn btn-sm btn-outline-primary">
+                                    View User Data
+                                </a>
+                                {% else %}
+                                <span class="text-muted">N/A</span>
+                                {% endif %}
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -932,6 +1022,333 @@ def admin_panel():
         total_orders=total_orders,
         total_stocks=total_stocks,
         visits=visits
+    )
+
+# -----------------------------
+# USER INFORMATION PAGE (TABLE)
+# -----------------------------
+@app.route("/admin/users")
+def admin_users():
+    if not require_login():
+        return redirect("/")
+
+    log_event("User information page opened")
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    # Group by IP
+    c.execute("""
+        SELECT ip,
+               MIN(timestamp) as first_seen,
+               MAX(timestamp) as last_seen,
+               COUNT(*) as visits,
+               MAX(user_agent) as sample_ua
+        FROM visits
+        WHERE ip IS NOT NULL AND ip != ''
+        GROUP BY ip
+        ORDER BY visits DESC
+    """)
+    rows = c.fetchall()
+    conn.close()
+
+    users = []
+    for r in rows:
+        ip = r[0]
+        first_seen = r[1]
+        last_seen = r[2]
+        visits = r[3]
+        ua = r[4] or ""
+        device, device_icon = parse_device(ua)
+        browser, browser_icon = parse_browser(ua)
+        geo = geo_lookup(ip)
+        users.append({
+            "ip": ip,
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "visits": visits,
+            "user_agent": ua,
+            "device": device,
+            "device_icon": device_icon,
+            "browser": browser,
+            "browser_icon": browser_icon,
+            "country": geo["country"],
+            "region": geo["region"],
+            "city": geo["city"]
+        })
+
+    template = """
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#ff4da6">
+
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+        <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/service-worker.js");
+        }
+        </script>
+
+        <style>
+            body { background: #fafafa; }
+            .card { border-radius: 15px; }
+            .ua-cell {
+                max-width: 260px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+        </style>
+    </head>
+
+    <body>
+
+    """ + NAVBAR + """
+    <div class="container mt-4">
+
+        <div class="card p-3 shadow-sm mb-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <h5>User Information</h5>
+                <a href="/admin" class="btn btn-sm btn-outline-secondary">Back to Admin</a>
+            </div>
+            <p class="text-muted mb-0">Unique visitors grouped by IP, with device, browser, and location.</p>
+        </div>
+
+        <div class="card p-3 shadow-sm">
+            <div class="table-responsive mt-2">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th>IP</th>
+                            <th>Device</th>
+                            <th>Browser</th>
+                            <th>Location</th>
+                            <th>Visits</th>
+                            <th>First Seen</th>
+                            <th>Last Seen</th>
+                            <th>User Data</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in users %}
+                        <tr>
+                            <td>{{ u.ip }}</td>
+                            <td>{{ u.device_icon }} {{ u.device }}</td>
+                            <td>{{ u.browser_icon }} {{ u.browser }}</td>
+                            <td>
+                                {% if u.country != 'Unknown' %}
+                                    {{ u.city }}{% if u.city %}, {% endif %}{{ u.region }}{% if u.region %}, {% endif %}{{ u.country }}
+                                {% else %}
+                                    Unknown
+                                {% endif %}
+                            </td>
+                            <td>{{ u.visits }}</td>
+                            <td>{{ u.first_seen }}</td>
+                            <td>{{ u.last_seen }}</td>
+                            <td>
+                                <a href="/admin/user/{{ u.ip }}" class="btn btn-sm btn-outline-primary">
+                                    View User Data
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    </body>
+    </html>
+    """
+
+    return render_template_string(template, title="User Information", users=users)
+
+# -----------------------------
+# USER DETAIL PAGE (CARD + TIMELINE)
+# -----------------------------
+@app.route("/admin/user/<ip>")
+def admin_user_detail(ip):
+    if not require_login():
+        return redirect("/")
+
+    log_event(f"User detail viewed: {ip}")
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+        SELECT event, timestamp, user_agent
+        FROM visits
+        WHERE ip = ?
+        ORDER BY timestamp ASC
+    """, (ip,))
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        events = []
+        ua = ""
+        first_seen = "N/A"
+        last_seen = "N/A"
+        visits = 0
+    else:
+        events = [{"event": r[0], "timestamp": r[1], "user_agent": r[2]} for r in rows]
+        ua = rows[-1][2] or ""
+        first_seen = rows[0][1]
+        last_seen = rows[-1][1]
+        visits = len(rows)
+
+    device, device_icon = parse_device(ua)
+    browser, browser_icon = parse_browser(ua)
+    geo = geo_lookup(ip)
+
+    pages_opened = set()
+    for e in events:
+        ev = e["event"].lower()
+        if "dashboard opened" in ev:
+            pages_opened.add("Dashboard")
+        if "orders page opened" in ev:
+            pages_opened.add("Orders")
+        if "stocks page opened" in ev:
+            pages_opened.add("Stocks")
+        if "profit page opened" in ev:
+            pages_opened.add("Profit")
+        if "admin panel opened" in ev:
+            pages_opened.add("Admin")
+        if "user information page opened" in ev:
+            pages_opened.add("User Information")
+
+    pages_opened_str = ", ".join(sorted(pages_opened)) if pages_opened else "Unknown"
+
+    template = """
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#ff4da6">
+
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+        <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/service-worker.js");
+        }
+        </script>
+
+        <style>
+            body { background: #fafafa; }
+            .card { border-radius: 15px; }
+            .timeline {
+                border-left: 2px solid #ff4da6;
+                margin-left: 10px;
+                padding-left: 15px;
+            }
+            .timeline-item {
+                position: relative;
+                margin-bottom: 12px;
+            }
+            .timeline-item::before {
+                content: "";
+                position: absolute;
+                left: -11px;
+                top: 4px;
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                background: #ff4da6;
+            }
+        </style>
+    </head>
+
+    <body>
+
+    """ + NAVBAR + """
+    <div class="container mt-4">
+
+        <div class="card p-3 shadow-sm mb-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <h5>User Detail</h5>
+                <div>
+                    <a href="/admin/users" class="btn btn-sm btn-outline-secondary me-2">Back to Users</a>
+                    <a href="/admin" class="btn btn-sm btn-outline-secondary">Back to Admin</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="card p-3 shadow-sm mb-3">
+            <div class="row">
+                <div class="col-12 col-md-6 mb-3">
+                    <h5>{{ device_icon }} {{ device }}</h5>
+                    <p class="mb-1"><strong>IP:</strong> {{ ip }}</p>
+                    <p class="mb-1"><strong>Browser:</strong> {{ browser_icon }} {{ browser }}</p>
+                    <p class="mb-1">
+                        <strong>Location:</strong>
+                        {% if country != 'Unknown' %}
+                            {{ city }}{% if city %}, {% endif %}{{ region }}{% if region %}, {% endif %}{{ country }}
+                        {% else %}
+                            Unknown
+                        {% endif %}
+                    </p>
+                    <p class="mb-1"><strong>Total Visits:</strong> {{ visits }}</p>
+                    <p class="mb-1"><strong>First Seen:</strong> {{ first_seen }}</p>
+                    <p class="mb-1"><strong>Last Seen:</strong> {{ last_seen }}</p>
+                    <p class="mb-1"><strong>Pages Opened:</strong> {{ pages_opened }}</p>
+                </div>
+                <div class="col-12 col-md-6">
+                    <h6>Latest User-Agent</h6>
+                    <p class="small text-muted">{{ user_agent }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card p-3 shadow-sm">
+            <h5>Activity Timeline</h5>
+            {% if events %}
+            <div class="timeline mt-3">
+                {% for e in events %}
+                <div class="timeline-item">
+                    <div class="small text-muted">{{ e.timestamp }}</div>
+                    <div>{{ e.event }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted mt-2">No events found for this IP.</p>
+            {% endif %}
+        </div>
+
+    </div>
+
+    </body>
+    </html>
+    """
+
+    return render_template_string(
+        template,
+        title="User Detail",
+        ip=ip,
+        device=device,
+        device_icon=device_icon,
+        browser=browser,
+        browser_icon=browser_icon,
+        country=geo["country"],
+        region=geo["region"],
+        city=geo["city"],
+        visits=visits,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        pages_opened=pages_opened_str,
+        user_agent=ua,
+        events=events
     )
 
 # -----------------------------
