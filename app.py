@@ -122,6 +122,17 @@ def log_event(event):
         ip = "unknown"
         ua = ""
 
+    # Ignore Render health checks and internal noise
+    if (
+        ip.startswith("10.") or
+        ip.startswith("100.") or
+        ip in ("127.0.0.1", "::1") or
+        "render" in ua.lower() or
+        "go-http-client" in ua.lower() or
+        "curl" in ua.lower()
+    ):
+        return
+
     device = parse_device(ua)
     browser = parse_browser(ua)
     geo = geo_lookup(ip)
