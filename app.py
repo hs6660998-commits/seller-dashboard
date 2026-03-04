@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime
 from flask import (
     Flask, request, redirect, session,
-    render_template_string, jsonify
+    render_template_string, jsonify, url_for
 )
 import requests
 
@@ -163,6 +163,124 @@ def require_login():
     return bool(session.get("logged_in"))
 
 # -----------------------------
+# PUBLIC HOMEPAGE ( / )
+# -----------------------------
+@app.route("/")
+def homepage():
+    # log homepage visit
+    log_event("Visited homepage")
+
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM orders")
+    total_orders = c.fetchone()[0]
+
+    c.execute("SELECT SUM(profit) FROM orders")
+    total_profit = c.fetchone()[0] or 0
+
+    c.execute("SELECT COUNT(*) FROM stocks")
+    total_stock = c.fetchone()[0]
+    conn.close()
+
+    return render_template_string("""
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Gemzy's Wardrobe Wonders</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-family: 'Poppins', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+                color: white;
+                text-align: center;
+                background: linear-gradient(45deg, #ff0099, #8a00ff, #ff00cc);
+                background-size: 600% 600%;
+                animation: gradientMove 12s ease infinite;
+            }
+            @keyframes gradientMove {
+                0% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+                100% { background-position: 0% 50%; }
+            }
+            .container {
+                animation: fadeIn 1.5s ease forwards;
+                opacity: 0;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            .logo {
+                width: 150px;
+                animation: float 3s ease-in-out infinite;
+            }
+            @keyframes float {
+                0% { transform: translateY(0px); }
+                50% { transform: translateY(-10px); }
+                100% { transform: translateY(0px); }
+            }
+            .username {
+                margin-top: 15px;
+                font-size: 1.7rem;
+                font-weight: 600;
+            }
+            .stats {
+                margin-top: 30px;
+                font-size: 1.1rem;
+                line-height: 1.7rem;
+            }
+            .dashboard-btn {
+                position: absolute;
+                top: 20px;
+                right: 20px;
+                background: white;
+                color: #ff00aa;
+                padding: 10px 20px;
+                border-radius: 30px;
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 0.9rem;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+                transition: 0.2s;
+            }
+            .dashboard-btn:hover {
+                background: #ffe6f7;
+            }
+            .site-icon {
+                position: absolute;
+                top: 20px;
+                left: 20px;
+                width: 55px;
+                border-radius: 12px;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+            }
+        </style>
+    </head>
+    <body>
+        <a href="{{ url_for('login') }}" class="dashboard-btn">Dashboard</a>
+        <img src="{{ url_for('static', filename='icon-192.png') }}" class="site-icon">
+
+        <div class="container">
+            <img src="{{ url_for('static', filename='whatnot-icon.png') }}" class="logo">
+            <div class="username">@gemzyswardrobewonders</div>
+            <div class="stats">
+                <div><b>Total Orders:</b> {{ total_orders }}</div>
+                <div><b>Total Profit:</b> £{{ '%.2f' % total_profit }}</div>
+                <div><b>Total Stock Items:</b> {{ total_stock }}</div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """, total_orders=total_orders, total_profit=total_profit, total_stock=total_stock)
+
+# -----------------------------
 # BASE HTML
 # -----------------------------
 BASE_HTML = """
@@ -206,7 +324,7 @@ BASE_HTML = """
     <nav class="navbar navbar-dark navbar-custom shadow-sm">
       <div class="container-fluid">
         <div class="d-flex align-items-center">
-            <img src="/icon-192.png" width="32" height="32" style="border-radius:10px;" class="me-2">
+            <img src="{{ url_for('static', filename='icon-192.png') }}" width="32" height="32" style="border-radius:10px;" class="me-2">
             <span class="navbar-brand">{{ title }}</span>
         </div>
         <div class="d-flex gap-1">
@@ -232,16 +350,16 @@ def render_page(title, inner_html):
     return render_template_string(BASE_HTML, title=title, content=inner_html)
 
 # -----------------------------
-# LOGIN
+# LOGIN (NOW AT /login)
 # -----------------------------
-@app.route("/", methods=["GET", "POST"])
+@app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         if request.form.get("username") == "admin" and request.form.get("password") == "admin":
             session["logged_in"] = True
             log_event("Admin logged in")
             return redirect("/dashboard")
-        return "<script>alert('Invalid credentials');window.location='/'</script>"
+        return "<script>alert('Invalid credentials');window.location='/login'</script>"
 
     return render_template_string("""
     <html><head>
@@ -276,7 +394,7 @@ def logout():
 @app.route("/dashboard")
 def dashboard():
     if not require_login():
-        return redirect("/")
+        return redirect("/login")
     log_event("Visited dashboard")
 
     conn = sqlite3.connect(DB_NAME)
@@ -327,7 +445,7 @@ def dashboard():
 @app.route("/orders", methods=["GET", "POST"])
 def orders():
     if not require_login():
-        return redirect("/")
+        return redirect("/login")
     log_event("Visited orders")
 
     conn = sqlite3.connect(DB_NAME)
@@ -507,7 +625,7 @@ def update_order_status():
 @app.route("/stocks", methods=["GET", "POST"])
 def stocks():
     if not require_login():
-        return redirect("/")
+        return redirect("/login")
     log_event("Visited stocks")
 
     conn = sqlite3.connect(DB_NAME)
@@ -593,7 +711,7 @@ def stocks():
 @app.route("/profit")
 def profit():
     if not require_login():
-        return redirect("/")
+        return redirect("/login")
     log_event("Visited profit")
 
     conn = sqlite3.connect(DB_NAME)
@@ -624,7 +742,7 @@ def profit():
 @app.route("/admin")
 def admin():
     if not require_login():
-        return redirect("/")
+        return redirect("/login")
     log_event("Visited admin")
 
     conn = sqlite3.connect(DB_NAME)
