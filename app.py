@@ -268,7 +268,7 @@ def homepage():
         <img src="{{ url_for('static', filename='icon-192.png') }}" class="site-icon">
 
         <div class="container">
-            <img src="{{ url_for('static', filename='whatnot-icon.png') }}" class="logo">
+            <img src="{{ url_for('static', filename='icon-192.png') }}" class="logo">
             <div class="username">@gemzyswardrobewonders</div>
             <div class="stats">
                 <div><b>Total Orders:</b> {{ total_orders }}</div>
