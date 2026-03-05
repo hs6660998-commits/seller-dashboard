@@ -28,7 +28,7 @@ DEFAULT_HOMEPAGE = {
     "title":"Gemzy's Wardrobe Wonders",
     "tagline":"Fashion • Media • Style • Live Shows",
     "cta_text":"Watch Live",
-    "cta_link":"https://www.whatnot.com",
+    "cta_link":"https://www.whatnot.com/user/gemzyswardrobewonders",
     "hero_image":"media-relations.png",
     "background":"pink"
 }
