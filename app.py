@@ -1,4 +1,3 @@
-```python
 import os, json
 from time import time
 from datetime import datetime, timedelta
@@ -20,12 +19,10 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 ALLOWED_EXT = {"png", "jpg", "jpeg", "gif"}
 
-# Admin credentials (can be overridden via environment variables)
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS")  # optional plain-text fallback
-ADMIN_PASS_HASH = os.getenv("ADMIN_PASS_HASH")  # preferred: hashed password
+ADMIN_PASS = os.getenv("ADMIN_PASS")
+ADMIN_PASS_HASH = os.getenv("ADMIN_PASS_HASH")
 
-# Simple in-memory login rate limiting
 login_attempts = {}
 
 def allowed_file(fn):
@@ -163,6 +160,82 @@ button,.btn{display:inline-block;padding:8px 16px;border-radius:20px;border:none
 """
 
 HOMEPAGE_BODY = """
+<!-- COUNTDOWN AT TOP -->
+<div class="countdown-box">
+  <h2>Next Live Show</h2>
+  <p><strong>08 March • 13:00 GMT</strong></p>
+  <div id="countdown"></div>
+</div>
+
+<style>
+.countdown-box {
+  background:#fff8fb;
+  padding:20px;
+  border-radius:16px;
+  text-align:center;
+  margin:30px 0;
+  box-shadow:0 3px 6px rgba(0,0,0,.06);
+}
+#countdown {
+  font-size:1.4rem;
+  font-weight:700;
+  color:#ff1493;
+  margin-top:10px;
+}
+.social-icons {
+  margin:30px 0;
+  text-align:center;
+}
+.social-icons img {
+  width:40px;
+  margin:0 10px;
+  filter:drop-shadow(0 2px 4px rgba(0,0,0,0.2));
+  transition:.2s;
+}
+.social-icons img:hover {
+  transform:scale(1.1);
+}
+.toast {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  background: #ff69b4;
+  color: white;
+  padding: 12px 18px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  opacity: 0;
+  transform: translateX(50px);
+  transition: all 0.6s ease;
+  z-index: 9999;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+</style>
+
+<script>
+const countdownTarget = new Date("2026-03-08T13:00:00Z").getTime();
+setInterval(() => {
+  const now = new Date().getTime();
+  const diff = countdownTarget - now;
+  const el = document.getElementById("countdown");
+  if (!el) return;
+  if (diff <= 0) {
+    el.innerHTML = "We're Live Now!";
+    return;
+  }
+  const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const h = Math.floor((diff / (1000 * 60 * 60)) % 24);
+  const m = Math.floor((diff / (1000 * 60)) % 60);
+  const s = Math.floor((diff / 1000) % 60);
+  el.innerHTML = `${d}d ${h}h ${m}m ${s}s`;
+}, 1000);
+</script>
+
 {% if banner.enabled %}
 <div class="banner" style="background:{{ banner.color }};">
   {{ banner.text }}
@@ -202,6 +275,13 @@ HOMEPAGE_BODY = """
     {% endif %}
   </div>
 </div>
+
+<!-- SOCIAL ICONS -->
+<div class="social-icons">
+  <a href="#" target="_blank"><img src="{{ url_for('static', filename='icons/tiktok.png') }}"></a>
+  <a href="#" target="_blank"><img src="{{ url_for('static', filename='icons/instagram.png') }}"></a>
+</div>
+
 <div class="socials">
   {% if socials.whatnot %}<a href="{{ socials.whatnot }}" target="_blank">Whatnot</a>{% endif %}
   {% if socials.tiktok %}<a href="{{ socials.tiktok }}" target="_blank">TikTok</a>{% endif %}
@@ -210,6 +290,30 @@ HOMEPAGE_BODY = """
   {% if socials.email %}<a href="mailto:{{ socials.email }}">Email</a>{% endif %}
   {% if socials.custom_link and socials.custom_label %}<a href="{{ socials.custom_link }}" target="_blank">{{ socials.custom_label }}</a>{% endif %}
 </div>
+
+<!-- NOTIFICATION-STYLE TESTIMONIALS -->
+<div id="testimonial-toast" class="toast"></div>
+
+<script>
+const testimonials = [
+  "“Gemzy always brings the best vibes!”",
+  "“Amazing bundles every time.”",
+  "“Fast shipping and great quality fits.”"
+];
+let testimonialIndex = 0;
+const toastEl = document.getElementById("testimonial-toast");
+function showToast() {
+  if (!toastEl) return;
+  toastEl.innerHTML = testimonials[testimonialIndex];
+  toastEl.classList.add("show");
+  setTimeout(() => {
+    toastEl.classList.remove("show");
+  }, 3500);
+  testimonialIndex = (testimonialIndex + 1) % testimonials.length;
+}
+setInterval(showToast, 5000);
+showToast();
+</script>
 """
 
 LOGIN_BODY = """
@@ -374,13 +478,11 @@ def source_label(referrer: str, src_param: str) -> str:
 
 @app.before_request
 def track_and_log():
-    # homepage view counter
     if request.endpoint == "homepage":
         stats = load_json("stats.json", DEFAULT_STATS)
         stats["views"] = stats.get("views", 0) + 1
         save_json("stats.json", stats)
 
-    # log all requests except static files
     if request.path.startswith("/static/"):
         return
 
@@ -394,7 +496,6 @@ def track_and_log():
         "src": request.args.get("src") or ""
     }
     logs.append(entry)
-    # keep last 5000 entries
     if len(logs) > 5000:
         logs = logs[-5000:]
     save_json("logs.json", logs)
@@ -488,7 +589,6 @@ def dashboard():
     total_visits = len(logs)
     unique_ips = len({e.get("ip", "") for e in logs if e.get("ip")})
 
-    # live visitors (last 60 seconds)
     live_cutoff = datetime.utcnow() - timedelta(seconds=60)
     live_visitors = 0
     for e in logs:
@@ -499,13 +599,11 @@ def dashboard():
         except Exception:
             continue
 
-    # device breakdown
     device_counts = Counter()
     for e in logs:
         device_counts[classify_device(e.get("agent", ""))] += 1
     device_breakdown = list(device_counts.items())
 
-    # traffic sources
     source_counts = Counter()
     for e in logs:
         src = source_label(e.get("ref", ""), e.get("src", ""))
@@ -620,9 +718,7 @@ def logs_view():
     if r:
         return r
     raw_logs = load_json("logs.json", [])
-    # show latest 200 entries
     latest = raw_logs[-200:]
-    # map to simple objects for template
     logs = []
     for e in reversed(latest):
         logs.append(type("LogEntry", (), {
@@ -642,4 +738,3 @@ def logs_view():
 
 if __name__ == "__main__":
     app.run(debug=True)
-```
