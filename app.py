@@ -1,46 +1,91 @@
 import os, json
-from flask import Flask, request, redirect, url_for, session, send_from_directory, flash, render_template_string
+from time import time
+from flask import (
+    Flask, request, redirect, url_for, session,
+    send_from_directory, flash, render_template_string
+)
 from werkzeug.utils import secure_filename
+from werkzeug.security import check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "APIGem12"
+app.secret_key = os.getenv("SECRET_KEY", "APIGem12")
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-UPLOAD_DIR = os.path.join("static", "uploads")
+UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 ALLOWED_EXT = {"png", "jpg", "jpeg", "gif"}
 
-def allowed_file(fn): return "." in fn and fn.rsplit(".",1)[1].lower() in ALLOWED_EXT
-def data_path(name): return os.path.join(DATA_DIR, name)
+# Admin credentials (can be overridden via environment variables)
+ADMIN_USER = os.getenv("ADMIN_USER", "admin")
+ADMIN_PASS = os.getenv("ADMIN_PASS")  # optional plain-text fallback
+ADMIN_PASS_HASH = os.getenv("ADMIN_PASS_HASH")  # preferred: hashed password
+
+# Simple in-memory login rate limiting
+login_attempts = {}
+
+
+def allowed_file(fn):
+    return "." in fn and fn.rsplit(".", 1)[1].lower() in ALLOWED_EXT
+
+
+def data_path(name):
+    return os.path.join(DATA_DIR, name)
+
+
 def load_json(name, default):
     p = data_path(name)
     if not os.path.exists(p):
-        save_json(name, default); return default
+        save_json(name, default)
+        return default
     try:
-        with open(p,"r",encoding="utf-8") as f: return json.load(f)
-    except: return default
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return default
+
+
 def save_json(name, data):
-    with open(data_path(name),"w",encoding="utf-8") as f: json.dump(data,f,indent=2,ensure_ascii=False)
+    with open(data_path(name), "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
 
 DEFAULT_HOMEPAGE = {
-    "title":"Gemzy's Wardrobe Wonders",
-    "tagline":"Fashion • Media • Style • Live Shows",
-    "cta_text":"Watch Live",
-    "cta_link":"https://www.whatnot.com/user/gemzyswardrobewonders",
-    "hero_image":"media-relations.png",
-    "background":"pink"
+    "title": "Gemzy's Wardrobe Wonders",
+    "tagline": "Fashion • Media • Style • Live Shows",
+    "cta_text": "Watch Live",
+    "cta_link": "https://www.whatnot.com/user/gemzyswardrobewonders",
+    "hero_image": "media-relations.png",
+    "background": "pink"
 }
 DEFAULT_FEATURED = []
-DEFAULT_BANNER = {"enabled":False,"text":"","color":"#ff69b4","image":""}
-DEFAULT_ABOUT = {"heading":"About Gemzy","text":"Gemzy brings curated fashion, live energy, and media magic to every show.","image":""}
-DEFAULT_SOCIALS = {"whatnot":"","tiktok":"","instagram":"","depop":"","email":"","custom_label":"","custom_link":""}
+DEFAULT_BANNER = {"enabled": False, "text": "", "color": "#ff69b4", "image": ""}
+DEFAULT_ABOUT = {
+    "heading": "About Gemzy",
+    "text": "Gemzy brings curated fashion, live energy, and media magic to every show.",
+    "image": ""
+}
+DEFAULT_SOCIALS = {
+    "whatnot": "",
+    "tiktok": "",
+    "instagram": "",
+    "depop": "",
+    "email": "",
+    "custom_label": "",
+    "custom_link": ""
+}
 DEFAULT_NOTES = []
+DEFAULT_STATS = {"views": 0}
 
-def is_logged_in(): return session.get("logged_in") is True
+def is_logged_in():
+    return session.get("logged_in") is True
+
+
 def require_login():
-    if not is_logged_in(): return redirect(url_for("admin_login"))
+    if not is_logged_in():
+        return redirect(url_for("admin_login"))
+
 
 BASE_TEMPLATE = """
 <!doctype html><html lang="en"><head>
@@ -92,15 +137,10 @@ button,.btn{display:inline-block;padding:8px 16px;border-radius:20px;border:none
 <div class="nav">
   <div class="nav-left">
     <a href="{{ url_for('homepage') }}">Home</a>
-    {% if admin %}<a href="{{ url_for('dashboard') }}">Dashboard</a>{% endif %}
   </div>
   <div class="nav-right">
     {% if admin %}
-      <a href="{{ url_for('homepage_editor') }}">Homepage</a>
-      <a href="{{ url_for('featured_media') }}">Featured</a>
-      <a href="{{ url_for('banner_editor') }}">Banner</a>
-      <a href="{{ url_for('about_editor') }}">About</a>
-      <a href="{{ url_for('social_links') }}">Socials</a>
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
       <a href="{{ url_for('notes') }}">Notes</a>
       <a href="{{ url_for('uploads') }}">Uploads</a>
       <a href="{{ url_for('logout') }}">Logout</a>
@@ -188,121 +228,13 @@ DASHBOARD_BODY = """
 <div class="card">
   <h2>Dashboard</h2>
   <p><strong>Homepage title:</strong> {{ homepage.title }}</p>
-  <p><strong>Featured items:</strong> {{ featured_count }}</p>
-  <p><strong>Banner:</strong> {{ "On" if banner.enabled else "Off" }}</p>
+  <p><strong>Homepage views:</strong> {{ stats.views }}</p>
   <p><strong>Notes:</strong> {{ notes|length }}</p>
+  <p><strong>Uploaded files:</strong> {{ files_count }}</p>
   <p>
-    <a class="btn" href="{{ url_for('homepage_editor') }}">Edit Homepage</a>
-    <a class="btn" href="{{ url_for('featured_media') }}">Manage Featured</a>
-    <a class="btn" href="{{ url_for('banner_editor') }}">Edit Banner</a>
+    <a class="btn" href="{{ url_for('notes') }}">Manage Notes</a>
+    <a class="btn" href="{{ url_for('uploads') }}">Manage Uploads</a>
   </p>
-</div>
-"""
-
-HOMEPAGE_EDITOR_BODY = """
-<div class="card">
-  <h2>Homepage Editor</h2>
-  <form method="post" enctype="multipart/form-data">
-    <label>Title</label>
-    <input type="text" name="title" value="{{ homepage.title }}">
-    <label>Tagline</label>
-    <input type="text" name="tagline" value="{{ homepage.tagline }}">
-    <label>CTA Text</label>
-    <input type="text" name="cta_text" value="{{ homepage.cta_text }}">
-    <label>CTA Link</label>
-    <input type="url" name="cta_link" value="{{ homepage.cta_link }}">
-    <label>Background</label>
-    <select name="background">
-      <option value="pink" {% if homepage.background=="pink" %}selected{% endif %}>Pink</option>
-      <option value="peach" {% if homepage.background=="peach" %}selected{% endif %}>Peach</option>
-      <option value="purple" {% if homepage.background=="purple" %}selected{% endif %}>Purple</option>
-    </select>
-    <label>Hero Image</label>
-    <input type="file" name="hero_image">
-    <button type="submit">Save</button>
-  </form>
-</div>
-"""
-
-FEATURED_BODY = """
-<div class="card">
-  <h2>Featured Media</h2>
-  <form method="post" enctype="multipart/form-data">
-    <label>Title</label>
-    <input type="text" name="title">
-    <label>Caption</label>
-    <input type="text" name="caption">
-    <label>Link</label>
-    <input type="url" name="link">
-    <label>Image</label>
-    <input type="file" name="image">
-    <button type="submit">Add</button>
-  </form>
-</div>
-<div class="card">
-  <h3>Existing Items</h3>
-  {% if featured %}
-    {% for item in featured %}
-      <div class="media-item" style="margin-bottom:10px;">
-        {% if item.image %}<img src="{{ url_for('uploaded_file', filename=item.image.split('uploads/')[1]) }}">{% endif %}
-        <strong>{{ item.title }}</strong><br>
-        <span>{{ item.caption }}</span><br>
-        {% if item.link %}<a href="{{ item.link }}" target="_blank">View</a><br>{% endif %}
-        <form method="post" action="{{ url_for('delete_featured', item_id=item.id) }}" style="margin-top:4px;">
-          <button class="btn btn-danger" type="submit">Delete</button>
-        </form>
-      </div>
-    {% endfor %}
-  {% else %}
-    <p>No featured media yet.</p>
-  {% endif %}
-</div>
-"""
-
-BANNER_BODY = """
-<div class="card">
-  <h2>Banner</h2>
-  <form method="post" enctype="multipart/form-data">
-    <label><input type="checkbox" name="enabled" {% if banner.enabled %}checked{% endif %}> Enabled</label><br><br>
-    <label>Text</label>
-    <input type="text" name="text" value="{{ banner.text }}">
-    <label>Colour</label>
-    <input type="text" name="color" value="{{ banner.color }}">
-    <label>Image (optional)</label>
-    <input type="file" name="image">
-    <button type="submit">Save</button>
-  </form>
-</div>
-"""
-
-ABOUT_BODY = """
-<div class="card">
-  <h2>About Section</h2>
-  <form method="post" enctype="multipart/form-data">
-    <label>Heading</label>
-    <input type="text" name="heading" value="{{ about.heading }}">
-    <label>Text</label>
-    <textarea name="text">{{ about.text }}</textarea>
-    <label>Image</label>
-    <input type="file" name="image">
-    <button type="submit">Save</button>
-  </form>
-</div>
-"""
-
-SOCIALS_BODY = """
-<div class="card">
-  <h2>Social Links</h2>
-  <form method="post">
-    <label>Whatnot</label><input type="url" name="whatnot" value="{{ socials.whatnot }}">
-    <label>TikTok</label><input type="url" name="tiktok" value="{{ socials.tiktok }}">
-    <label>Instagram</label><input type="url" name="instagram" value="{{ socials.instagram }}">
-    <label>Depop</label><input type="url" name="depop" value="{{ socials.depop }}">
-    <label>Email</label><input type="text" name="email" value="{{ socials.email }}">
-    <label>Custom Label</label><input type="text" name="custom_label" value="{{ socials.custom_label }}">
-    <label>Custom Link</label><input type="url" name="custom_link" value="{{ socials.custom_link }}">
-    <button type="submit">Save</button>
-  </form>
 </div>
 """
 
@@ -360,6 +292,14 @@ UPLOADS_BODY = """
 </div>
 """
 
+@app.before_request
+def count_homepage_views():
+    if request.endpoint == "homepage":
+        stats = load_json("stats.json", DEFAULT_STATS)
+        stats["views"] = stats.get("views", 0) + 1
+        save_json("stats.json", stats)
+
+
 @app.route("/")
 def homepage():
     homepage_data = load_json("homepage.json", DEFAULT_HOMEPAGE)
@@ -367,205 +307,190 @@ def homepage():
     banner = load_json("banner.json", DEFAULT_BANNER)
     about = load_json("about.json", DEFAULT_ABOUT)
     socials = load_json("socials.json", DEFAULT_SOCIALS)
-    body = render_template_string(HOMEPAGE_BODY, homepage=homepage_data, featured=featured, banner=banner, about=about, socials=socials)
-    return render_template_string(BASE_TEMPLATE, title=homepage_data["title"], body=body, admin=is_logged_in())
+    body = render_template_string(
+        HOMEPAGE_BODY,
+        homepage=homepage_data,
+        featured=featured,
+        banner=banner,
+        about=about,
+        socials=socials
+    )
+    return render_template_string(
+        BASE_TEMPLATE,
+        title=homepage_data["title"],
+        body=body,
+        admin=is_logged_in()
+    )
+
 
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_DIR, filename)
 
-@app.route("/admin", methods=["GET","POST"])
+
+def too_many_attempts(ip):
+    now = time()
+    attempts = login_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < 60]
+    login_attempts[ip] = attempts
+    return len(attempts) >= 5
+
+
+@app.route("/admin", methods=["GET", "POST"])
 def admin_login():
-    error=None
-    if request.method=="POST":
-        u=request.form.get("username","").strip()
-        p=request.form.get("password","").strip()
-        if u=="admin" and p=="admin":
-            session["logged_in"]=True
-            return redirect(url_for("dashboard"))
-        else: error="Incorrect username or password."
+    error = None
+    if request.method == "POST":
+        u = request.form.get("username", "").strip()
+        p = request.form.get("password", "").strip()
+        ip = request.remote_addr or "unknown"
+
+        if too_many_attempts(ip):
+            error = "Too many attempts. Try again in a minute."
+        else:
+            login_attempts.setdefault(ip, []).append(time())
+
+            if ADMIN_PASS_HASH:
+                ok = (u == ADMIN_USER and check_password_hash(ADMIN_PASS_HASH, p))
+            else:
+                # Fallback: plain-text password, default admin/admin
+                expected_pass = ADMIN_PASS or "admin"
+                ok = (u == ADMIN_USER and p == expected_pass)
+
+            if ok:
+                session["logged_in"] = True
+                return redirect(url_for("dashboard"))
+            else:
+                error = "Incorrect username or password."
+
     body = render_template_string(LOGIN_BODY, error=error)
-    return render_template_string(BASE_TEMPLATE, title="Admin Login", body=body, admin=False)
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Admin Login",
+        body=body,
+        admin=False
+    )
+
 
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("admin_login"))
 
+
 @app.route("/dashboard")
 def dashboard():
-    r=require_login()
-    if r: return r
+    r = require_login()
+    if r:
+        return r
     homepage_data = load_json("homepage.json", DEFAULT_HOMEPAGE)
-    featured = load_json("featured.json", DEFAULT_FEATURED)
-    banner = load_json("banner.json", DEFAULT_BANNER)
     notes = load_json("notes.json", DEFAULT_NOTES)
-    body = render_template_string(DASHBOARD_BODY, homepage=homepage_data, featured_count=len(featured), banner=banner, notes=notes)
-    return render_template_string(BASE_TEMPLATE, title="Dashboard", body=body, admin=True)
+    stats = load_json("stats.json", DEFAULT_STATS)
+    try:
+        files = os.listdir(UPLOAD_DIR)
+    except FileNotFoundError:
+        files = []
+    body = render_template_string(
+        DASHBOARD_BODY,
+        homepage=homepage_data,
+        notes=notes,
+        stats=stats,
+        files_count=len(files)
+    )
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Dashboard",
+        body=body,
+        admin=True
+    )
 
-@app.route("/admin/homepage", methods=["GET","POST"])
-def homepage_editor():
-    r=require_login()
-    if r: return r
-    homepage_data = load_json("homepage.json", DEFAULT_HOMEPAGE)
-    if request.method=="POST":
-        homepage_data["title"]=request.form.get("title",homepage_data["title"])
-        homepage_data["tagline"]=request.form.get("tagline",homepage_data["tagline"])
-        homepage_data["cta_text"]=request.form.get("cta_text",homepage_data["cta_text"])
-        homepage_data["cta_link"]=request.form.get("cta_link",homepage_data["cta_link"])
-        homepage_data["background"]=request.form.get("background",homepage_data["background"])
-        f=request.files.get("hero_image")
-        if f and f.filename and allowed_file(f.filename):
-            fn=secure_filename(f.filename); f.save(os.path.join(UPLOAD_DIR,fn))
-            homepage_data["hero_image"]=f"uploads/{fn}"
-        save_json("homepage.json",homepage_data)
-        flash("Homepage updated.","success")
-        return redirect(url_for("homepage_editor"))
-    body = render_template_string(HOMEPAGE_EDITOR_BODY, homepage=homepage_data)
-    return render_template_string(BASE_TEMPLATE, title="Homepage Editor", body=body, admin=True)
 
-@app.route("/admin/featured", methods=["GET","POST"])
-def featured_media():
-    r=require_login()
-    if r: return r
-    featured = load_json("featured.json", DEFAULT_FEATURED)
-    if request.method=="POST":
-        title=request.form.get("title","").strip()
-        caption=request.form.get("caption","").strip()
-        link=request.form.get("link","").strip()
-        img=""
-        f=request.files.get("image")
-        if f and f.filename and allowed_file(f.filename):
-            fn=secure_filename(f.filename); f.save(os.path.join(UPLOAD_DIR,fn))
-            img=f"uploads/{fn}"
-        if title or caption or link or img:
-            new_id=max([i["id"] for i in featured],default=0)+1
-            featured.append({"id":new_id,"title":title,"caption":caption,"link":link,"image":img})
-            save_json("featured.json",featured)
-            flash("Featured media added.","success")
-        return redirect(url_for("featured_media"))
-    body = render_template_string(FEATURED_BODY, featured=featured)
-    return render_template_string(BASE_TEMPLATE, title="Featured Media", body=body, admin=True)
-
-@app.route("/admin/featured/delete/<int:item_id>", methods=["POST"])
-def delete_featured(item_id):
-    r=require_login()
-    if r: return r
-    featured = load_json("featured.json", DEFAULT_FEATURED)
-    featured=[i for i in featured if i["id"]!=item_id]
-    save_json("featured.json",featured)
-    flash("Featured media deleted.","success")
-    return redirect(url_for("featured_media"))
-
-@app.route("/admin/banner", methods=["GET","POST"])
-def banner_editor():
-    r=require_login()
-    if r: return r
-    banner = load_json("banner.json", DEFAULT_BANNER)
-    if request.method=="POST":
-        banner["enabled"]=request.form.get("enabled")=="on"
-        banner["text"]=request.form.get("text","")
-        banner["color"]=request.form.get("color",banner["color"])
-        f=request.files.get("image")
-        if f and f.filename and allowed_file(f.filename):
-            fn=secure_filename(f.filename); f.save(os.path.join(UPLOAD_DIR,fn))
-            banner["image"]=f"uploads/{fn}"
-        save_json("banner.json",banner)
-        flash("Banner updated.","success")
-        return redirect(url_for("banner_editor"))
-    body = render_template_string(BANNER_BODY, banner=banner)
-    return render_template_string(BASE_TEMPLATE, title="Banner Editor", body=body, admin=True)
-
-@app.route("/admin/about", methods=["GET","POST"])
-def about_editor():
-    r=require_login()
-    if r: return r
-    about = load_json("about.json", DEFAULT_ABOUT)
-    if request.method=="POST":
-        about["heading"]=request.form.get("heading",about["heading"])
-        about["text"]=request.form.get("text",about["text"])
-        f=request.files.get("image")
-        if f and f.filename and allowed_file(f.filename):
-            fn=secure_filename(f.filename); f.save(os.path.join(UPLOAD_DIR,fn))
-            about["image"]=f"uploads/{fn}"
-        save_json("about.json",about)
-        flash("About updated.","success")
-        return redirect(url_for("about_editor"))
-    body = render_template_string(ABOUT_BODY, about=about)
-    return render_template_string(BASE_TEMPLATE, title="About Editor", body=body, admin=True)
-
-@app.route("/admin/socials", methods=["GET","POST"])
-def social_links():
-    r=require_login()
-    if r: return r
-    socials = load_json("socials.json", DEFAULT_SOCIALS)
-    if request.method=="POST":
-        for k in socials.keys():
-            socials[k]=request.form.get(k,"").strip()
-        save_json("socials.json",socials)
-        flash("Social links updated.","success")
-        return redirect(url_for("social_links"))
-    body = render_template_string(SOCIALS_BODY, socials=socials)
-    return render_template_string(BASE_TEMPLATE, title="Social Links", body=body, admin=True)
-
-@app.route("/admin/notes", methods=["GET","POST"])
+@app.route("/admin/notes", methods=["GET", "POST"])
 def notes():
-    r=require_login()
-    if r: return r
+    r = require_login()
+    if r:
+        return r
     notes_data = load_json("notes.json", DEFAULT_NOTES)
-    if request.method=="POST":
-        text=request.form.get("text","").strip()
+    if request.method == "POST":
+        text = request.form.get("text", "").strip()
         if text:
-            new_id=max([n["id"] for n in notes_data],default=0)+1
-            notes_data.append({"id":new_id,"text":text,"done":False})
-            save_json("notes.json",notes_data)
-            flash("Note added.","success")
+            new_id = max([n["id"] for n in notes_data], default=0) + 1
+            notes_data.append({"id": new_id, "text": text, "done": False})
+            save_json("notes.json", notes_data)
+            flash("Note added.", "success")
         return redirect(url_for("notes"))
     body = render_template_string(NOTES_BODY, notes=notes_data)
-    return render_template_string(BASE_TEMPLATE, title="Notes", body=body, admin=True)
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Notes",
+        body=body,
+        admin=True
+    )
+
 
 @app.route("/admin/notes/toggle/<int:note_id>", methods=["POST"])
 def toggle_note(note_id):
-    r=require_login()
-    if r: return r
+    r = require_login()
+    if r:
+        return r
     notes_data = load_json("notes.json", DEFAULT_NOTES)
     for n in notes_data:
-        if n["id"]==note_id: n["done"]=not n["done"]; break
-    save_json("notes.json",notes_data)
+        if n["id"] == note_id:
+            n["done"] = not n["done"]
+            break
+    save_json("notes.json", notes_data)
     return redirect(url_for("notes"))
+
 
 @app.route("/admin/notes/delete/<int:note_id>", methods=["POST"])
 def delete_note(note_id):
-    r=require_login()
-    if r: return r
+    r = require_login()
+    if r:
+        return r
     notes_data = load_json("notes.json", DEFAULT_NOTES)
-    notes_data=[n for n in notes_data if n["id"]!=note_id]
-    save_json("notes.json",notes_data)
-    flash("Note deleted.","success")
+    notes_data = [n for n in notes_data if n["id"] != note_id]
+    save_json("notes.json", notes_data)
+    flash("Note deleted.", "success")
     return redirect(url_for("notes"))
 
-@app.route("/admin/uploads", methods=["GET","POST"])
+
+@app.route("/admin/uploads", methods=["GET", "POST"])
 def uploads():
-    r=require_login()
-    if r: return r
-    if request.method=="POST":
-        f=request.files.get("file")
+    r = require_login()
+    if r:
+        return r
+    if request.method == "POST":
+        f = request.files.get("file")
         if f and f.filename and allowed_file(f.filename):
-            fn=secure_filename(f.filename); f.save(os.path.join(UPLOAD_DIR,fn))
-            flash("File uploaded.","success")
-        else: flash("Invalid file.","error")
+            fn = secure_filename(f.filename)
+            f.save(os.path.join(UPLOAD_DIR, fn))
+            flash("File uploaded.", "success")
+        else:
+            flash("Invalid file.", "error")
         return redirect(url_for("uploads"))
-    files=os.listdir(UPLOAD_DIR)
+    try:
+        files = os.listdir(UPLOAD_DIR)
+    except FileNotFoundError:
+        files = []
     body = render_template_string(UPLOADS_BODY, files=files)
-    return render_template_string(BASE_TEMPLATE, title="Uploads", body=body, admin=True)
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Uploads",
+        body=body,
+        admin=True
+    )
+
 
 @app.route("/admin/uploads/delete/<filename>", methods=["POST"])
 def delete_upload(filename):
-    r=require_login()
-    if r: return r
-    p=os.path.join(UPLOAD_DIR,filename)
-    if os.path.exists(p): os.remove(p); flash("File deleted.","success")
+    r = require_login()
+    if r:
+        return r
+    p = os.path.join(UPLOAD_DIR, filename)
+    if os.path.exists(p):
+        os.remove(p)
+        flash("File deleted.", "success")
     return redirect(url_for("uploads"))
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     app.run(debug=True)
